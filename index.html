@@ -1,0 +1,1069 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>俄罗斯方块棋 Tetris Weiqi</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  user-select: none;
+  overflow-x: hidden;
+}
+
+/* Header */
+.header { text-align: center; padding: 10px 0 4px; }
+.header h1 {
+  font-size: 24px;
+  background: linear-gradient(90deg, #4fc3f7, #e040fb);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 4px;
+}
+.header .subtitle { font-size: 11px; color: #666; letter-spacing: 2px; }
+
+/* Top bar: settings + controls */
+.top-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  padding: 6px 10px;
+  max-width: 800px;
+}
+.top-bar button {
+  padding: 5px 14px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+.top-bar select {
+  background: #16213e; color: #e0e0e0; border: 1px solid #333;
+  border-radius: 6px; padding: 4px 6px; font-size: 12px;
+}
+.top-bar label { font-size: 12px; color: #999; }
+button {
+  background: #16213e;
+  color: #e0e0e0;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+button:hover { background: #1a3a5c; border-color: #4fc3f7; }
+button:active { transform: scale(0.96); }
+button.primary { background: #4fc3f7; color: #1a1a2e; font-weight: bold; }
+button.primary:hover { background: #81d4fa; }
+button.mode-btn.selected { background: #4fc3f7; color: #1a1a2e; border-color: #4fc3f7; font-weight: bold; }
+button.rotate-btn { background: #2d1b4e; border-color: #7c4dff; }
+button.skip-btn { background: #4a1a1a; border-color: #c62828; }
+
+/* Status */
+.status-bar {
+  text-align: center; font-size: 14px; min-height: 20px;
+  color: #fdd835; padding: 4px 0;
+}
+
+/* Main game area */
+.game-area {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  justify-content: center;
+  padding: 0 6px;
+}
+
+/* Side panels */
+.panel {
+  width: 140px;
+  min-width: 140px;
+  background: #16213e;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: box-shadow 0.3s;
+}
+.panel h2 { font-size: 14px; text-align: center; margin: 0; }
+.panel.p1 { border: 2px solid #4fc3f744; }
+.panel.p2 { border: 2px solid #e040fb44; }
+.panel.p1.active { border-color: #4fc3f7; box-shadow: 0 0 16px rgba(79,195,247,0.3); }
+.panel.p2.active { border-color: #e040fb; box-shadow: 0 0 16px rgba(224,64,251,0.3); }
+
+.score-row { display: flex; justify-content: space-between; align-items: center; }
+.score-label { font-size: 11px; color: #888; }
+.score-value { font-size: 22px; font-weight: bold; }
+.p1 .score-value { color: #4fc3f7; }
+.p2 .score-value { color: #e040fb; }
+
+.preview-box {
+  background: #0f1a30;
+  border-radius: 6px;
+  padding: 6px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 80px;
+}
+.preview-canvas { display: block; }
+
+/* Board */
+.board-wrapper {
+  background: #0d1117;
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 0 24px rgba(0,0,0,0.5);
+  flex-shrink: 0;
+}
+#boardCanvas {
+  display: block;
+  cursor: crosshair;
+  border-radius: 3px;
+}
+
+/* Footer */
+.footer {
+  display: flex; gap: 16px; justify-content: center;
+  font-size: 11px; color: #555; padding: 6px 0; flex-wrap: wrap;
+}
+.legend-item { display: flex; align-items: center; gap: 3px; }
+.legend-swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #444; }
+
+/* Game over overlay */
+.overlay {
+  display: none;
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.75);
+  z-index: 100;
+  justify-content: center;
+  align-items: center;
+}
+.overlay.show { display: flex; }
+.dialog {
+  background: #16213e;
+  border-radius: 16px;
+  padding: 28px;
+  text-align: center;
+  max-width: 360px;
+  border: 2px solid #4fc3f7;
+}
+.dialog h2 { font-size: 20px; margin-bottom: 12px; }
+.dialog .result { font-size: 36px; margin: 12px 0; }
+.dialog .detail { color: #999; font-size: 13px; margin-bottom: 16px; white-space: pre-line; }
+
+/* Mobile controls */
+.mobile-controls {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0 12px;
+}
+.mobile-row { display: flex; gap: 6px; }
+.mobile-btn {
+  width: 56px; height: 48px;
+  font-size: 20px;
+  background: #16213e;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mobile-btn:active { background: #2a4a6e; transform: scale(0.93); }
+.mobile-btn.place-btn {
+  width: 64px;
+  background: #4fc3f7; color: #1a1a2e; font-weight: bold; font-size: 15px;
+  border-color: #4fc3f7;
+}
+.mobile-btn.rotate-m { background: #2d1b4e; border-color: #7c4dff; font-size: 14px; width: 64px; }
+.mobile-btn.skip-m { background: #4a1a1a; border-color: #c62828; font-size: 14px; width: 64px; }
+
+.desktop-hint { display: inline; }
+.mobile-hint { display: none; }
+
+/* Responsive */
+@media (max-width: 600px) {
+  .header h1 { font-size: 20px; }
+  .game-area { flex-direction: column; align-items: center; gap: 6px; }
+  .panel { width: 100%; max-width: 360px; flex-direction: row; flex-wrap: wrap; justify-content: space-around; min-width: auto; padding: 8px; }
+  .panel h2 { width: 100%; font-size: 13px; }
+  .preview-box { min-height: 60px; }
+  .score-value { font-size: 18px; }
+  .top-bar { padding: 4px 6px; gap: 5px; }
+  .top-bar button { padding: 4px 10px; font-size: 12px; }
+  .mobile-controls { display: flex; }
+  .desktop-hint { display: none; }
+  .mobile-hint { display: inline; }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .mobile-controls { display: flex; }
+  .desktop-hint { display: none; }
+  .mobile-hint { display: inline; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>俄罗斯方块棋</h1>
+  <div class="subtitle">Tetris meets Weiqi</div>
+</div>
+
+<div class="top-bar">
+  <button class="mode-btn selected" id="btnPvAI" onclick="setMode('pvai')">人机</button>
+  <button class="mode-btn" id="btnPvP" onclick="setMode('pvp')">双人</button>
+  <label>棋盘</label>
+  <select id="boardSizeSelect" onchange="changeBoardSize()">
+    <option value="10" selected>10x10</option>
+    <option value="13">13x13</option>
+    <option value="15">15x15</option>
+  </select>
+  <label>AI</label>
+  <select id="aiLevelSelect">
+    <option value="1">简单</option>
+    <option value="2" selected>普通</option>
+    <option value="3">困难</option>
+  </select>
+  <button class="primary" onclick="startGame()">开始游戏</button>
+  <button class="rotate-btn" onclick="rotatePiece()">旋转(R)</button>
+  <button class="skip-btn" onclick="skipTurn()">跳过</button>
+</div>
+
+<div class="status-bar" id="statusBar">点击"开始游戏"开始</div>
+
+<div class="game-area">
+  <div class="panel p1" id="panelP1">
+    <h2>玩家 1 (蓝)</h2>
+    <div class="score-row">
+      <span class="score-label">方块数</span>
+      <span class="score-value" id="scoreP1">0</span>
+    </div>
+    <div class="score-label">当前方块</div>
+    <div class="preview-box"><canvas class="preview-canvas" id="previewP1" width="90" height="90"></canvas></div>
+  </div>
+
+  <div class="board-wrapper">
+    <canvas id="boardCanvas"></canvas>
+  </div>
+
+  <div class="panel p2" id="panelP2">
+    <h2>玩家 2 (紫)</h2>
+    <div class="score-row">
+      <span class="score-label">方块数</span>
+      <span class="score-value" id="scoreP2">0</span>
+    </div>
+    <div class="score-label">当前方块</div>
+    <div class="preview-box"><canvas class="preview-canvas" id="previewP2" width="90" height="90"></canvas></div>
+  </div>
+</div>
+
+<div class="footer">
+  <div class="legend-item"><div class="legend-swatch" style="background:#4fc3f7"></div> 玩家1</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#e040fb"></div> 玩家2</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#3d1a1a"></div> 死亡区域</div>
+  <span class="desktop-hint">鼠标预览 | 点击落子 | R旋转 | 方向键微调</span>
+  <span class="mobile-hint">触屏拖动预览 | 松手落子 | 双指旋转</span>
+</div>
+
+<!-- Mobile touch controls -->
+<div class="mobile-controls" id="mobileControls">
+  <button class="mobile-btn" ontouchstart="movePieceDir(-1,0)" onclick="movePieceDir(-1,0)">&#9650;</button>
+  <div class="mobile-row">
+    <button class="mobile-btn" ontouchstart="movePieceDir(0,-1)" onclick="movePieceDir(0,-1)">&#9664;</button>
+    <button class="mobile-btn place-btn" ontouchstart="confirmPlace()" onclick="confirmPlace()">落子</button>
+    <button class="mobile-btn" ontouchstart="movePieceDir(0,1)" onclick="movePieceDir(0,1)">&#9654;</button>
+  </div>
+  <button class="mobile-btn" ontouchstart="movePieceDir(1,0)" onclick="movePieceDir(1,0)">&#9660;</button>
+  <div class="mobile-row" style="margin-top:6px">
+    <button class="mobile-btn rotate-m" ontouchstart="rotatePiece()" onclick="rotatePiece()">旋转</button>
+    <button class="mobile-btn skip-m" ontouchstart="skipTurn()" onclick="skipTurn()">跳过</button>
+  </div>
+</div>
+
+<div class="overlay" id="gameOverOverlay">
+  <div class="dialog">
+    <h2 id="gameOverTitle">游戏结束</h2>
+    <div class="result" id="gameOverResult"></div>
+    <div class="detail" id="gameOverDetail"></div>
+    <button class="primary" onclick="closeOverlay(); startGame();">再来一局</button>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Constants
+// ============================================================
+const EMPTY = 0, P1 = 1, P2 = 2, DEAD1 = 3, DEAD2 = 4;
+const P1_COLOR = '#4fc3f7', P1_DARK = '#2980b9';
+const P2_COLOR = '#e040fb', P2_DARK = '#9c27b0';
+const GRID_COLOR = '#1e2d3d', BG_COLOR = '#0d1117';
+const GHOST_ALPHA = 0.35;
+
+// Standard 7 Tetris pieces as [row, col] offsets
+const PIECE_SHAPES = {
+  I: [[0,0],[0,1],[0,2],[0,3]],
+  O: [[0,0],[0,1],[1,0],[1,1]],
+  T: [[0,0],[0,1],[0,2],[1,1]],
+  S: [[0,1],[0,2],[1,0],[1,1]],
+  Z: [[0,0],[0,1],[1,1],[1,2]],
+  L: [[0,0],[1,0],[2,0],[2,1]],
+  J: [[0,1],[1,1],[2,0],[2,1]]
+};
+const PIECE_NAMES = Object.keys(PIECE_SHAPES);
+
+// ============================================================
+// State
+// ============================================================
+let BOARD_SIZE = 10;
+let CELL_SIZE = 32;
+let board = [];
+let currentPlayer = P1;
+let pieces = { [P1]: null, [P2]: null };
+let gameActive = false;
+let gameMode = 'pvai';
+let ghostPos = null;
+let rotation = 0;
+let skipCount = 0;
+
+let boardCanvas, boardCtx, previewP1, prevCtx1, previewP2, prevCtx2;
+
+// ============================================================
+// Init
+// ============================================================
+function init() {
+  boardCanvas = document.getElementById('boardCanvas');
+  boardCtx = boardCanvas.getContext('2d');
+  previewP1 = document.getElementById('previewP1');
+  prevCtx1 = previewP1.getContext('2d');
+  previewP2 = document.getElementById('previewP2');
+  prevCtx2 = previewP2.getContext('2d');
+
+  boardCanvas.addEventListener('mousemove', onMouseMove);
+  boardCanvas.addEventListener('mouseleave', () => { ghostPos = null; render(); });
+  boardCanvas.addEventListener('click', onBoardClick);
+  boardCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); rotatePiece(); });
+  document.addEventListener('keydown', onKeyDown);
+
+  // Touch events
+  boardCanvas.addEventListener('touchstart', onTouchStart, { passive: false });
+  boardCanvas.addEventListener('touchmove', onTouchMove, { passive: false });
+  boardCanvas.addEventListener('touchend', onTouchEnd, { passive: false });
+
+  resizeBoard();
+  render();
+}
+
+function resizeBoard() {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const isMobile = vw <= 600 || (matchMedia('(hover:none) and (pointer:coarse)').matches);
+  const availW = isMobile ? vw - 24 : Math.min(vw - 320, 560);
+  const availH = isMobile ? vh - 340 : vh - 200;
+  CELL_SIZE = Math.max(18, Math.min(40, Math.floor(Math.min(availW, availH) / BOARD_SIZE)));
+  boardCanvas.width = BOARD_SIZE * CELL_SIZE;
+  boardCanvas.height = BOARD_SIZE * CELL_SIZE;
+}
+
+function createBoard() {
+  board = [];
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    board.push(new Array(BOARD_SIZE).fill(EMPTY));
+  }
+}
+
+function setMode(mode) {
+  gameMode = mode;
+  document.getElementById('btnPvAI').classList.toggle('selected', mode === 'pvai');
+  document.getElementById('btnPvP').classList.toggle('selected', mode === 'pvp');
+  document.getElementById('panelP2').querySelector('h2').textContent =
+    mode === 'pvai' ? 'AI (紫)' : '玩家 2 (紫)';
+}
+
+function changeBoardSize() {
+  BOARD_SIZE = parseInt(document.getElementById('boardSizeSelect').value);
+  resizeBoard();
+  createBoard();
+  render();
+}
+
+function startGame() {
+  BOARD_SIZE = parseInt(document.getElementById('boardSizeSelect').value);
+  resizeBoard();
+  createBoard();
+  currentPlayer = P1;
+  rotation = 0;
+  skipCount = 0;
+  gameActive = true;
+  generatePiece(P1);
+  generatePiece(P2);
+  updatePanels();
+  setStatus(playerName(P1) + ' 的回合');
+  render();
+}
+
+// ============================================================
+// Pieces
+// ============================================================
+function generatePiece(player) {
+  const name = PIECE_NAMES[Math.floor(Math.random() * PIECE_NAMES.length)];
+  pieces[player] = { name, cells: PIECE_SHAPES[name].map(c => [...c]) };
+}
+
+function getRotatedCells(cells, rot) {
+  let c = cells.map(p => [...p]);
+  for (let i = 0; i < (rot % 4); i++) {
+    c = c.map(([r, cl]) => [cl, -r]);
+  }
+  let minR = Infinity, minC = Infinity;
+  c.forEach(([r, cl]) => { minR = Math.min(minR, r); minC = Math.min(minC, cl); });
+  return c.map(([r, cl]) => [r - minR, cl - minC]);
+}
+
+function getCurrentCells() {
+  if (!pieces[currentPlayer]) return [];
+  return getRotatedCells(pieces[currentPlayer].cells, rotation);
+}
+
+function getPieceBounds(cells) {
+  let maxR = 0, maxC = 0;
+  cells.forEach(([r, c]) => { maxR = Math.max(maxR, r); maxC = Math.max(maxC, c); });
+  return { rows: maxR + 1, cols: maxC + 1 };
+}
+
+// ============================================================
+// Placement Validation
+// ============================================================
+// 死区规则：DEAD1 封锁 P1，DEAD2 封锁 P2
+// 己方可以落在对方的死区上（占领转化）
+function cellAllowedFor(cell, player) {
+  if (cell === EMPTY) return true;
+  // 允许落在对方死区上
+  if (player === P1 && cell === DEAD2) return true;
+  if (player === P2 && cell === DEAD1) return true;
+  return false;
+}
+
+function canPlace(cells, row, col, player) {
+  for (const [dr, dc] of cells) {
+    const r = row + dr, c = col + dc;
+    if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return false;
+    if (!cellAllowedFor(board[r][c], player)) return false;
+  }
+  return true;
+}
+
+// 完整合法性检查：canPlace + 自杀禁手
+// 模拟落子 → 提对方 → 检查己方是否有气 → 还原
+function isLegalMove(cells, row, col, player) {
+  if (!canPlace(cells, row, col, player)) return false;
+
+  // 保存棋盘快照
+  const snapshot = board.map(r => [...r]);
+
+  // 模拟落子（覆盖死区）
+  for (const [dr, dc] of cells) {
+    board[row + dr][col + dc] = player;
+  }
+
+  // 先提对方无气之子
+  const opponent = player === P1 ? P2 : P1;
+  captureGroupsOf(opponent);
+
+  // 检查己方是否有无气组（自杀检测）
+  const selfDead = hasDeadGroups(player);
+
+  // 还原棋盘
+  for (let r = 0; r < BOARD_SIZE; r++)
+    for (let c = 0; c < BOARD_SIZE; c++)
+      board[r][c] = snapshot[r][c];
+
+  return !selfDead; // 自杀则不合法
+}
+
+function canPlaceAnywhere(player, pieceCells) {
+  for (let rot = 0; rot < 4; rot++) {
+    const cells = getRotatedCells(pieceCells, rot);
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        if (isLegalMove(cells, r, c, player)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// ============================================================
+// Go Capture Logic
+// ============================================================
+function getGroup(row, col, visited) {
+  const owner = board[row][col];
+  if (owner !== P1 && owner !== P2) return null;
+  const group = [];
+  const liberties = new Set();
+  const stack = [[row, col]];
+  const key = (r, c) => r * BOARD_SIZE + c;
+  visited.add(key(row, col));
+
+  while (stack.length) {
+    const [r, c] = stack.pop();
+    group.push([r, c]);
+    for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+      const k = key(nr, nc);
+      if (visited.has(k)) continue;
+      const cell = board[nr][nc];
+      if (cell === EMPTY) {
+        liberties.add(k);
+      } else if (cell === owner) {
+        visited.add(k);
+        stack.push([nr, nc]);
+      }
+    }
+  }
+  return { owner, group, liberties: liberties.size };
+}
+
+// 提掉指定方无气的棋组，返回提子数
+function captureGroupsOf(target) {
+  const deadMark = target === P1 ? DEAD1 : DEAD2;
+  const visited = new Set();
+  let totalCaptured = 0;
+
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const k = r * BOARD_SIZE + c;
+      if (visited.has(k) || board[r][c] !== target) continue;
+      const g = getGroup(r, c, visited);
+      if (g && g.liberties === 0) {
+        g.group.forEach(([gr, gc]) => { board[gr][gc] = deadMark; });
+        totalCaptured += g.group.length;
+      }
+    }
+  }
+  return totalCaptured;
+}
+
+// 检查指定方是否有无气的棋组（用于自杀检测，不修改棋盘）
+function hasDeadGroups(player) {
+  const visited = new Set();
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const k = r * BOARD_SIZE + c;
+      if (visited.has(k) || board[r][c] !== player) continue;
+      const g = getGroup(r, c, visited);
+      if (g && g.liberties === 0) return true;
+    }
+  }
+  return false;
+}
+
+// 完整提子流程：先提对方 → 再提己方（理论上不会发生，因有自杀禁手）
+function checkCaptures(placedBy) {
+  const opponent = placedBy === P1 ? P2 : P1;
+  const captured = captureGroupsOf(opponent);
+  captureGroupsOf(placedBy); // 安全检查
+  return captured;
+}
+
+// ============================================================
+// Tetris Line Clear
+// ============================================================
+function checkLineClears() {
+  let cleared = 0;
+  // Check rows
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    let full = true;
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (board[r][c] === EMPTY) { full = false; break; }
+    }
+    if (full) {
+      for (let c = 0; c < BOARD_SIZE; c++) board[r][c] = EMPTY;
+      cleared++;
+    }
+  }
+  // Check columns
+  for (let c = 0; c < BOARD_SIZE; c++) {
+    let full = true;
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      if (board[r][c] === EMPTY) { full = false; break; }
+    }
+    if (full) {
+      for (let r = 0; r < BOARD_SIZE; r++) board[r][c] = EMPTY;
+      cleared++;
+    }
+  }
+  return cleared;
+}
+
+// ============================================================
+// Scoring - 仅数棋面方块
+// ============================================================
+function countPieces(player) {
+  let n = 0;
+  for (let r = 0; r < BOARD_SIZE; r++)
+    for (let c = 0; c < BOARD_SIZE; c++)
+      if (board[r][c] === player) n++;
+  return n;
+}
+
+function countDeadZones(player) {
+  // 统计己方制造的死区数（对手的DEAD标记 = 己方的领地/围杀成果）
+  const deadCell = player === P1 ? DEAD2 : DEAD1;
+  let n = 0;
+  for (let r = 0; r < BOARD_SIZE; r++)
+    for (let c = 0; c < BOARD_SIZE; c++)
+      if (board[r][c] === deadCell) n++;
+  return n;
+}
+
+// ============================================================
+// Place & Turn
+// ============================================================
+function placePiece(cells, row, col, player) {
+  for (const [dr, dc] of cells) {
+    board[row + dr][col + dc] = player;
+  }
+  const captured = checkCaptures(player);
+  const linesCleared = checkLineClears();
+  if (linesCleared > 0) checkCaptures(player);
+  return { captured, linesCleared };
+}
+
+function nextTurn() {
+  currentPlayer = currentPlayer === P1 ? P2 : P1;
+  rotation = 0;
+  ghostPos = null;
+
+  if (!canPlaceAnywhere(currentPlayer, pieces[currentPlayer].cells)) {
+    generatePiece(currentPlayer);
+    if (!canPlaceAnywhere(currentPlayer, pieces[currentPlayer].cells)) {
+      endGame();
+      return;
+    }
+  }
+
+  updatePanels();
+  setStatus(playerName(currentPlayer) + ' 的回合');
+  render();
+
+  if (gameMode === 'pvai' && currentPlayer === P2 && gameActive) {
+    setTimeout(aiMove, 400);
+  }
+}
+
+function skipTurn() {
+  if (!gameActive) return;
+  if (gameMode === 'pvai' && currentPlayer === P2) return;
+  skipCount++;
+  generatePiece(currentPlayer);
+  if (skipCount >= 2) { endGame(); return; }
+  setStatus(playerName(currentPlayer) + ' 跳过了回合');
+  nextTurn();
+}
+
+function endGame() {
+  gameActive = false;
+  const s1 = countPieces(P1), s2 = countPieces(P2);
+  const d1 = countDeadZones(P1), d2 = countDeadZones(P2);
+
+  let result;
+  if (s1 > s2) result = playerName(P1) + ' 获胜!';
+  else if (s2 > s1) result = playerName(P2) + ' 获胜!';
+  else result = '平局!';
+
+  document.getElementById('gameOverTitle').textContent = '游戏结束';
+  document.getElementById('gameOverResult').textContent = result;
+  document.getElementById('gameOverDetail').textContent =
+    `${playerName(P1)}: ${s1} 方块` + (d1 ? `, ${d1} 围杀` : '') +
+    `\n${playerName(P2)}: ${s2} 方块` + (d2 ? `, ${d2} 围杀` : '');
+  document.getElementById('gameOverOverlay').classList.add('show');
+  updatePanels();
+  render();
+}
+
+function closeOverlay() {
+  document.getElementById('gameOverOverlay').classList.remove('show');
+}
+
+// ============================================================
+// AI
+// ============================================================
+function aiMove() {
+  if (!gameActive || currentPlayer !== P2) return;
+  const aiLevel = parseInt(document.getElementById('aiLevelSelect').value);
+  const piece = pieces[P2];
+  let bestScore = -Infinity;
+  let bestMoves = [];
+
+  for (let rot = 0; rot < 4; rot++) {
+    const cells = getRotatedCells(piece.cells, rot);
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        if (!isLegalMove(cells, r, c, P2)) continue;
+        const boardCopy = board.map(row => [...row]);
+        for (const [dr, dc] of cells) board[r + dr][c + dc] = P2;
+        const captured = checkCaptures(P2);
+        const linesCleared = checkLineClears();
+        if (linesCleared > 0) checkCaptures(P2);
+
+        const score = evaluateAI(r, c, cells, captured, linesCleared, aiLevel);
+
+        // Restore board
+        for (let rr = 0; rr < BOARD_SIZE; rr++)
+          for (let cc = 0; cc < BOARD_SIZE; cc++)
+            board[rr][cc] = boardCopy[rr][cc];
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestMoves = [{ rot, row: r, col: c, cells }];
+        } else if (score === bestScore) {
+          bestMoves.push({ rot, row: r, col: c, cells });
+        }
+      }
+    }
+  }
+
+  if (bestMoves.length === 0) {
+    skipCount++;
+    generatePiece(P2);
+    if (skipCount >= 2) { endGame(); return; }
+    nextTurn();
+    return;
+  }
+
+  const move = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+  rotation = move.rot;
+  const result = placePiece(move.cells, move.row, move.col, P2);
+  skipCount = 0;
+
+  let msg = 'AI 落子';
+  if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
+  if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
+  setStatus(msg);
+
+  generatePiece(P2);
+  updatePanels();
+  render();
+  setTimeout(() => nextTurn(), 500);
+}
+
+function evaluateAI(row, col, cells, captured, linesCleared, level) {
+  let score = captured * 15 + linesCleared * 3;
+
+  const center = BOARD_SIZE / 2;
+  let avgR = 0, avgC = 0;
+  cells.forEach(([dr, dc]) => { avgR += row + dr; avgC += col + dc; });
+  avgR /= cells.length; avgC /= cells.length;
+  score -= (Math.abs(avgR - center) + Math.abs(avgC - center)) * 0.3;
+
+  let ownAdj = 0, enemyAdj = 0;
+  for (const [dr, dc] of cells) {
+    const r = row + dr, c = col + dc;
+    for (const [nr, nc] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+      const ar = r + nr, ac = c + nc;
+      if (ar < 0 || ar >= BOARD_SIZE || ac < 0 || ac >= BOARD_SIZE) continue;
+      if (board[ar][ac] === P2) ownAdj++;
+      if (board[ar][ac] === P1) enemyAdj++;
+    }
+  }
+  score += ownAdj * 1.5;
+
+  if (level >= 2) {
+    score += enemyAdj * 2;
+    score += countPieces(P2) * 0.1;
+  }
+
+  if (level >= 3) {
+    const visited = new Set();
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        const k = r * BOARD_SIZE + c;
+        if (visited.has(k) || board[r][c] !== P1) continue;
+        const g = getGroup(r, c, visited);
+        if (g && g.liberties <= 2) score += (3 - g.liberties) * 5;
+      }
+    }
+    score += captured * 5;
+  }
+
+  score += Math.random() * 0.5;
+  return score;
+}
+
+// ============================================================
+// Input
+// ============================================================
+function onMouseMove(e) {
+  if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
+  const rect = boardCanvas.getBoundingClientRect();
+  const col = Math.floor((e.clientX - rect.left) / CELL_SIZE);
+  const row = Math.floor((e.clientY - rect.top) / CELL_SIZE);
+  const cells = getCurrentCells();
+  const bounds = getPieceBounds(cells);
+  ghostPos = { row: row - Math.floor(bounds.rows / 2), col: col - Math.floor(bounds.cols / 2) };
+  render();
+}
+
+function onBoardClick(e) {
+  if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2) || !ghostPos) return;
+  const cells = getCurrentCells();
+  if (!isLegalMove(cells, ghostPos.row, ghostPos.col, currentPlayer)) return;
+  doPlace();
+}
+
+function onKeyDown(e) {
+  if (!gameActive) return;
+  if (e.key === 'r' || e.key === 'R') rotatePiece();
+  else if (e.key === 'ArrowLeft' && ghostPos) { ghostPos.col--; render(); }
+  else if (e.key === 'ArrowRight' && ghostPos) { ghostPos.col++; render(); }
+  else if (e.key === 'ArrowUp' && ghostPos) { ghostPos.row--; render(); }
+  else if (e.key === 'ArrowDown' && ghostPos) { ghostPos.row++; render(); }
+}
+
+function rotatePiece() {
+  if (!gameActive) return;
+  rotation = (rotation + 1) % 4;
+  render();
+  renderPreview(currentPlayer);
+}
+
+// ============================================================
+// Touch Input
+// ============================================================
+let touchStartPos = null;
+let touchFingerCount = 0;
+let touchMoved = false;
+
+function getTouchBoardPos(touch) {
+  const rect = boardCanvas.getBoundingClientRect();
+  const col = Math.floor((touch.clientX - rect.left) / CELL_SIZE);
+  const row = Math.floor((touch.clientY - rect.top) / CELL_SIZE);
+  const cells = getCurrentCells();
+  const bounds = getPieceBounds(cells);
+  return { row: row - Math.floor(bounds.rows / 2), col: col - Math.floor(bounds.cols / 2) };
+}
+
+function onTouchStart(e) {
+  e.preventDefault();
+  if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
+  touchFingerCount = e.touches.length;
+  touchMoved = false;
+
+  // Two-finger tap = rotate
+  if (e.touches.length >= 2) {
+    rotatePiece();
+    return;
+  }
+
+  const pos = getTouchBoardPos(e.touches[0]);
+  ghostPos = pos;
+  touchStartPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  render();
+}
+
+function onTouchMove(e) {
+  e.preventDefault();
+  if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
+  if (e.touches.length !== 1) return;
+  touchMoved = true;
+  ghostPos = getTouchBoardPos(e.touches[0]);
+  render();
+}
+
+function onTouchEnd(e) {
+  e.preventDefault();
+  if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
+  if (touchFingerCount >= 2) return; // was a rotate gesture
+
+  // If didn't move much, treat as tap-to-place
+  if (!touchMoved && ghostPos) {
+    const cells = getCurrentCells();
+    if (isLegalMove(cells, ghostPos.row, ghostPos.col, currentPlayer)) {
+      doPlace();
+      return;
+    }
+  }
+
+  // If dragged, place at release position
+  if (touchMoved && ghostPos) {
+    const cells = getCurrentCells();
+    if (isLegalMove(cells, ghostPos.row, ghostPos.col, currentPlayer)) {
+      doPlace();
+      return;
+    }
+  }
+
+  // Keep ghost visible for mobile d-pad adjustments
+  render();
+}
+
+// Mobile d-pad controls
+function movePieceDir(dr, dc) {
+  if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
+  if (!ghostPos) {
+    // Default to board center
+    const cells = getCurrentCells();
+    const bounds = getPieceBounds(cells);
+    ghostPos = {
+      row: Math.floor((BOARD_SIZE - bounds.rows) / 2),
+      col: Math.floor((BOARD_SIZE - bounds.cols) / 2)
+    };
+  }
+  ghostPos.row += dr;
+  ghostPos.col += dc;
+  render();
+}
+
+function confirmPlace() {
+  if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
+  if (!ghostPos) {
+    movePieceDir(0, 0);
+    return;
+  }
+  const cells = getCurrentCells();
+  if (isLegalMove(cells, ghostPos.row, ghostPos.col, currentPlayer)) {
+    doPlace();
+  }
+}
+
+function doPlace() {
+  const cells = getCurrentCells();
+  const result = placePiece(cells, ghostPos.row, ghostPos.col, currentPlayer);
+  skipCount = 0;
+
+  let msg = playerName(currentPlayer) + ' 落子';
+  if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
+  if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
+  setStatus(msg);
+
+  generatePiece(currentPlayer);
+  ghostPos = null;
+  updatePanels();
+  render();
+  setTimeout(() => nextTurn(), 200);
+}
+
+// ============================================================
+// Rendering
+// ============================================================
+function render() {
+  const ctx = boardCtx;
+  const size = BOARD_SIZE * CELL_SIZE;
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, size, size);
+
+  // Grid
+  ctx.strokeStyle = GRID_COLOR;
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= BOARD_SIZE; i++) {
+    ctx.beginPath(); ctx.moveTo(i * CELL_SIZE, 0); ctx.lineTo(i * CELL_SIZE, size); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * CELL_SIZE); ctx.lineTo(size, i * CELL_SIZE); ctx.stroke();
+  }
+
+  // Cells
+  for (let r = 0; r < BOARD_SIZE; r++)
+    for (let c = 0; c < BOARD_SIZE; c++)
+      if (board[r][c] !== EMPTY) drawCell(ctx, r, c, board[r][c]);
+
+  // Ghost
+  if (ghostPos && gameActive && pieces[currentPlayer]) {
+    const cells = getCurrentCells();
+    const valid = isLegalMove(cells, ghostPos.row, ghostPos.col, currentPlayer);
+    ctx.globalAlpha = GHOST_ALPHA;
+    for (const [dr, dc] of cells) {
+      const r = ghostPos.row + dr, c = ghostPos.col + dc;
+      if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) continue;
+      ctx.fillStyle = valid ? (currentPlayer === P1 ? P1_COLOR : P2_COLOR) : '#ff1744';
+      ctx.fillRect(c * CELL_SIZE + 1, r * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawCell(ctx, r, c, cell) {
+  const x = c * CELL_SIZE, y = r * CELL_SIZE, pad = 1;
+  if (cell === P1 || cell === P2) {
+    ctx.fillStyle = cell === P1 ? P1_COLOR : P2_COLOR;
+    ctx.fillRect(x + pad, y + pad, CELL_SIZE - pad * 2, CELL_SIZE - pad * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x + pad, y + pad, CELL_SIZE - pad * 2, 3);
+    ctx.fillRect(x + pad, y + pad, 3, CELL_SIZE - pad * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(x + CELL_SIZE - pad - 3, y + pad, 3, CELL_SIZE - pad * 2);
+    ctx.fillRect(x + pad, y + CELL_SIZE - pad - 3, CELL_SIZE - pad * 2, 3);
+  } else if (cell === DEAD1 || cell === DEAD2) {
+    ctx.fillStyle = cell === DEAD1 ? '#3d1a1a' : '#1a1a3d';
+    ctx.fillRect(x + pad, y + pad, CELL_SIZE - pad * 2, CELL_SIZE - pad * 2);
+    ctx.strokeStyle = cell === DEAD1 ? '#6d3333' : '#33336d';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x + 4, y + 4); ctx.lineTo(x + CELL_SIZE - 4, y + CELL_SIZE - 4);
+    ctx.moveTo(x + CELL_SIZE - 4, y + 4); ctx.lineTo(x + 4, y + CELL_SIZE - 4);
+    ctx.stroke();
+  }
+}
+
+function renderPreview(player) {
+  const canvas = player === P1 ? previewP1 : previewP2;
+  const ctx = player === P1 ? prevCtx1 : prevCtx2;
+  ctx.clearRect(0, 0, 90, 90);
+  const piece = pieces[player];
+  if (!piece) return;
+  const rot = player === currentPlayer ? rotation : 0;
+  const cells = getRotatedCells(piece.cells, rot);
+  const bounds = getPieceBounds(cells);
+  const cellSz = Math.min(20, Math.floor(72 / Math.max(bounds.rows, bounds.cols)));
+  const offX = (90 - bounds.cols * cellSz) / 2;
+  const offY = (90 - bounds.rows * cellSz) / 2;
+  const color = player === P1 ? P1_COLOR : P2_COLOR;
+  for (const [r, c] of cells) {
+    ctx.fillStyle = color;
+    ctx.fillRect(offX + c * cellSz + 1, offY + r * cellSz + 1, cellSz - 2, cellSz - 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(offX + c * cellSz + 1, offY + r * cellSz + 1, cellSz - 2, 2);
+  }
+}
+
+function updatePanels() {
+  document.getElementById('scoreP1').textContent = countPieces(P1);
+  document.getElementById('scoreP2').textContent = countPieces(P2);
+  document.getElementById('panelP1').classList.toggle('active', currentPlayer === P1 && gameActive);
+  document.getElementById('panelP2').classList.toggle('active', currentPlayer === P2 && gameActive);
+  renderPreview(P1);
+  renderPreview(P2);
+}
+
+function setStatus(msg) {
+  document.getElementById('statusBar').textContent = msg;
+}
+
+function playerName(p) {
+  if (p === P1) return '玩家1(蓝)';
+  return gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)';
+}
+
+// ============================================================
+// Boot
+// ============================================================
+window.addEventListener('load', init);
+window.addEventListener('resize', () => { resizeBoard(); render(); });
+</script>
+</body>
+</html>
