@@ -24,7 +24,11 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-from tetris_weiqi import (TetrisWeiqi, SimpleAI, PIECE_NAMES,
+from tetris_weiqi import (TetrisWeiqi, SimpleAI, PIECE_NAMES, parse_bool_flag,
+                          parse_piece_distribution, parse_terminal_mode,
+                          parse_end_condition_mode, parse_no_legal_move_mode,
+                          parse_resolution_mode, parse_dead_zone_activation_mode,
+                          parse_non_negative_int,
                           EMPTY, P1, P2, DEAD1, DEAD2)
 
 
@@ -38,6 +42,8 @@ class GameStats:
     total_moves: int = 0
     p1_pieces_final: int = 0
     p2_pieces_final: int = 0
+    p1_score_final: float = 0.0
+    p2_score_final: float = 0.0
 
     # 围杀相关
     p1_captures: int = 0        # P1总围杀子数
@@ -149,6 +155,8 @@ def play_and_collect(game: TetrisWeiqi, ai1: SimpleAI, ai2: SimpleAI) -> GameSta
     stats.winner = game.winner
     stats.p1_pieces_final = game.count_pieces(P1)
     stats.p2_pieces_final = game.count_pieces(P2)
+    stats.p1_score_final = game.final_score(P1)
+    stats.p2_score_final = game.final_score(P2)
     stats.p1_dead_zones_final = game.count_dead_zones(P1)
     stats.p2_dead_zones_final = game.count_dead_zones(P2)
 
@@ -160,14 +168,32 @@ def play_and_collect(game: TetrisWeiqi, ai1: SimpleAI, ai2: SimpleAI) -> GameSta
 # ============================================================
 def run_analysis(num_games: int = 500, board_size: int = 10,
                  ai_level: int = 2, seed: int = 0,
-                 dead_zone_fills_line: bool = True) -> List[GameStats]:
+                 dead_zone_fills_line: bool = True,
+                 score_dead_zone_weight: float = 0.0,
+                 piece_distribution: str = 'bag7',
+                 terminal_mode: str = 'pieces_only',
+                 allow_voluntary_skip: bool = False,
+                 end_condition_mode: str = 'double_forced_pass',
+                 no_legal_move_mode: str = 'reroll_once_then_pass',
+                 resolution_mode: str = 'capture_then_clear_recheck',
+                 dead_zone_activation_mode: str = 'immediate',
+                 no_legal_move_rerolls: int = 1) -> List[GameStats]:
     """运行大量对局并收集统计"""
     all_stats = []
     t0 = time.time()
 
     for i in range(num_games):
         game = TetrisWeiqi(board_size, seed=seed + i,
-                           dead_zone_fills_line=dead_zone_fills_line)
+                           dead_zone_fills_line=dead_zone_fills_line,
+                           score_dead_zone_weight=score_dead_zone_weight,
+                           piece_distribution=piece_distribution,
+                           terminal_mode=terminal_mode,
+                           allow_voluntary_skip=allow_voluntary_skip,
+                           end_condition_mode=end_condition_mode,
+                           no_legal_move_mode=no_legal_move_mode,
+                           resolution_mode=resolution_mode,
+                           dead_zone_activation_mode=dead_zone_activation_mode,
+                           no_legal_move_rerolls=no_legal_move_rerolls)
         ai1 = SimpleAI(ai_level)
         ai2 = SimpleAI(ai_level)
         stats = play_and_collect(game, ai1, ai2)
@@ -311,7 +337,7 @@ def diagnose(all_stats: List[GameStats], board_size: int = 10):
     avg_moves = sum(s.total_moves for s in all_stats) / n
     avg_lead_changes = sum(s.lead_changes for s in all_stats) / n
     avg_max_lead = sum(s.max_lead for s in all_stats) / n
-    avg_margin = sum(abs(s.p1_pieces_final - s.p2_pieces_final) for s in all_stats) / n
+    avg_margin = sum(abs(s.p1_score_final - s.p2_score_final) for s in all_stats) / n
 
     print('├────────────────────────────────────────────────────────────┤')
     print('│ 5. 对局节奏                                               │')
@@ -503,6 +529,30 @@ def main():
     p.add_argument('--compare', action='store_true', help='对比规则变体')
     p.add_argument('--dead-zone-ab', action='store_true',
                    help='A/B对比死区是否参与消行判定')
+    p.add_argument('--dead-zone-fills-line', type=parse_bool_flag, default=True,
+                   help='死区是否参与消行判定: true/false (默认 true)')
+    p.add_argument('--score-dead-zone-weight', type=float, default=0.0,
+                   help='终局计分时死区权重，默认 0.0')
+    p.add_argument('--piece-distribution', type=parse_piece_distribution, default='bag7',
+                   help='方块发牌模式: uniform / bag7 / bag7_independent (默认 bag7)')
+    p.add_argument('--terminal-mode', type=parse_terminal_mode, default='pieces_only',
+                   help='终局判定: pieces_only / pieces_then_deadzones / area_like')
+    p.add_argument('--allow-voluntary-skip', type=parse_bool_flag, default=False,
+                   help='是否允许玩家在仍有合法着法时主动 skip: true/false (默认 false)')
+    p.add_argument('--end-condition-mode', type=parse_end_condition_mode,
+                   default='double_forced_pass',
+                   help='终局触发: double_forced_pass 或 single_forced_pass')
+    p.add_argument('--no-legal-move-mode', type=parse_no_legal_move_mode,
+                   default='reroll_once_then_pass',
+                   help='无合法着法处理: pass_and_redraw 或 reroll_once_then_pass (默认 reroll_once_then_pass)')
+    p.add_argument('--resolution-mode', type=parse_resolution_mode,
+                   default='capture_then_clear_recheck',
+                   help='结算顺序: capture_then_clear_recheck / clear_then_capture / capture_then_clear_once')
+    p.add_argument('--dead-zone-activation-mode', type=parse_dead_zone_activation_mode,
+                   default='immediate',
+                   help='死区转化生效时序: immediate 或 next_turn')
+    p.add_argument('--no-legal-move-rerolls', type=parse_non_negative_int, default=1,
+                   help='无合法着法时最多额外重抽几次，仅在 reroll_once_then_pass 模式下生效')
     p.add_argument('--json', type=str, default=None, help='输出JSON报告')
     args = p.parse_args()
 
@@ -511,7 +561,19 @@ def main():
     elif args.compare:
         compare_variants(args.games, args.ai_level)
     else:
-        stats = run_analysis(args.games, args.size, args.ai_level, args.seed)
+        stats = run_analysis(
+            args.games, args.size, args.ai_level, args.seed,
+            dead_zone_fills_line=args.dead_zone_fills_line,
+            score_dead_zone_weight=args.score_dead_zone_weight,
+            piece_distribution=args.piece_distribution,
+            terminal_mode=args.terminal_mode,
+            allow_voluntary_skip=args.allow_voluntary_skip,
+            end_condition_mode=args.end_condition_mode,
+            no_legal_move_mode=args.no_legal_move_mode,
+            resolution_mode=args.resolution_mode,
+            dead_zone_activation_mode=args.dead_zone_activation_mode,
+            no_legal_move_rerolls=args.no_legal_move_rerolls
+        )
         result = diagnose(stats, args.size)
         if args.json:
             with open(args.json, 'w') as f:

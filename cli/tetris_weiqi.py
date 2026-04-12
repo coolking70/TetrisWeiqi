@@ -54,6 +54,78 @@ CELL_CHARS = {
 }
 
 
+def parse_bool_flag(value: str) -> bool:
+    value = value.strip().lower()
+    if value in ('1', 'true', 'yes', 'y', 'on'):
+        return True
+    if value in ('0', 'false', 'no', 'n', 'off'):
+        return False
+    raise argparse.ArgumentTypeError(f'无效布尔值: {value}')
+
+
+def parse_piece_distribution(value: str) -> str:
+    value = value.strip().lower()
+    if value in ('uniform', 'bag7', 'bag7_independent'):
+        return value
+    raise argparse.ArgumentTypeError(f'无效发牌模式: {value} (应为 uniform / bag7 / bag7_independent)')
+
+
+def parse_terminal_mode(value: str) -> str:
+    value = value.strip().lower()
+    if value in ('pieces_only', 'pieces_then_deadzones', 'area_like'):
+        return value
+    raise argparse.ArgumentTypeError(
+        f'无效终局判定模式: {value} (应为 pieces_only / pieces_then_deadzones / area_like)'
+    )
+
+
+def parse_end_condition_mode(value: str) -> str:
+    value = value.strip().lower()
+    if value in ('double_forced_pass', 'single_forced_pass'):
+        return value
+    raise argparse.ArgumentTypeError(
+        f'无效终局触发模式: {value} (应为 double_forced_pass 或 single_forced_pass)'
+    )
+
+
+def parse_no_legal_move_mode(value: str) -> str:
+    value = value.strip().lower()
+    if value in ('pass_and_redraw', 'reroll_once_then_pass'):
+        return value
+    raise argparse.ArgumentTypeError(
+        f'无效无着法处理模式: {value} (应为 pass_and_redraw 或 reroll_once_then_pass)'
+    )
+
+
+def parse_resolution_mode(value: str) -> str:
+    value = value.strip().lower()
+    if value in ('capture_then_clear_recheck', 'clear_then_capture', 'capture_then_clear_once'):
+        return value
+    raise argparse.ArgumentTypeError(
+        '无效结算顺序模式: '
+        f'{value} (应为 capture_then_clear_recheck / clear_then_capture / capture_then_clear_once)'
+    )
+
+
+def parse_dead_zone_activation_mode(value: str) -> str:
+    value = value.strip().lower()
+    if value in ('immediate', 'next_turn'):
+        return value
+    raise argparse.ArgumentTypeError(
+        f'无效死区转化生效模式: {value} (应为 immediate 或 next_turn)'
+    )
+
+
+def parse_non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f'无效非负整数: {value}') from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f'无效非负整数: {value}')
+    return parsed
+
+
 # ============================================================
 # Game Engine
 # ============================================================
@@ -61,10 +133,30 @@ class TetrisWeiqi:
     """完整游戏引擎，与 index.html 规则一致"""
 
     def __init__(self, size: int = 10, seed: Optional[int] = None,
-                 dead_zone_fills_line: bool = True):
+                 dead_zone_fills_line: bool = True,
+                 score_dead_zone_weight: float = 0.0,
+                 piece_distribution: str = 'bag7',
+                 terminal_mode: str = 'pieces_only',
+                 allow_voluntary_skip: bool = False,
+                 end_condition_mode: str = 'double_forced_pass',
+                 no_legal_move_mode: str = 'reroll_once_then_pass',
+                 resolution_mode: str = 'capture_then_clear_recheck',
+                 dead_zone_activation_mode: str = 'immediate',
+                 no_legal_move_rerolls: int = 1):
         self.size = size
         self.dead_zone_fills_line = dead_zone_fills_line  # 死区是否参与消行判定
+        self.score_dead_zone_weight = score_dead_zone_weight
+        self.piece_distribution = piece_distribution
+        self.terminal_mode = terminal_mode
+        self.allow_voluntary_skip = allow_voluntary_skip
+        self.end_condition_mode = end_condition_mode
+        self.no_legal_move_mode = no_legal_move_mode
+        self.resolution_mode = resolution_mode
+        self.dead_zone_activation_mode = dead_zone_activation_mode
+        self.no_legal_move_rerolls = no_legal_move_rerolls
         self.rng = random.Random(seed)
+        self._piece_bag = []
+        self._player_piece_bags = {P1: [], P2: []}
         self.reset()
 
     def reset(self):
@@ -82,7 +174,18 @@ class TetrisWeiqi:
     # --- Piece Logic ---
 
     def _generate_piece(self, player: int):
-        name = self.rng.choice(PIECE_NAMES)
+        if self.piece_distribution == 'bag7':
+            if not self._piece_bag:
+                self._piece_bag = PIECE_NAMES[:]
+                self.rng.shuffle(self._piece_bag)
+            name = self._piece_bag.pop()
+        elif self.piece_distribution == 'bag7_independent':
+            if not self._player_piece_bags[player]:
+                self._player_piece_bags[player] = PIECE_NAMES[:]
+                self.rng.shuffle(self._player_piece_bags[player])
+            name = self._player_piece_bags[player].pop()
+        else:
+            name = self.rng.choice(PIECE_NAMES)
         self.pieces[player] = {
             'name': name,
             'cells': list(PIECE_SHAPES[name]),
@@ -127,13 +230,22 @@ class TetrisWeiqi:
     def is_legal_move(self, cells, row: int, col: int, player: int) -> bool:
         if not self.can_place(cells, row, col, player):
             return False
-        # 模拟落子 → 提对方 → 检查己方自杀
+        # 模拟完整结算顺序，再检查己方是否仍为自杀
         snapshot = [r[:] for r in self.board]
+        converted_cells = set()
         for dr, dc in cells:
-            self.board[row + dr][col + dc] = player
-        opponent = P2 if player == P1 else P1
-        self._capture_groups_of(opponent)
-        self_dead = self._has_dead_groups(player)
+            rr, cc = row + dr, col + dc
+            if self.board[rr][cc] in (DEAD1, DEAD2):
+                converted_cells.add((rr, cc))
+            self.board[rr][cc] = player
+        self._resolve_placement_effects(
+            player,
+            allow_self_capture=False,
+            converted_cells=converted_cells,
+            previous_board=snapshot
+        )
+        inactive = converted_cells if self.dead_zone_activation_mode == 'next_turn' else None
+        self_dead = self._has_dead_groups(player, inactive, snapshot)
         self.board = snapshot
         return not self_dead
 
@@ -170,8 +282,17 @@ class TetrisWeiqi:
 
     # --- Capture Logic ---
 
-    def _get_group(self, row: int, col: int, visited: Set[int]):
-        owner = self.board[row][col]
+    def _cell_at(self, row: int, col: int,
+                 inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
+                 previous_board: Optional[List[List[int]]] = None) -> int:
+        if inactive_conversions and previous_board is not None and (row, col) in inactive_conversions:
+            return previous_board[row][col]
+        return self.board[row][col]
+
+    def _get_group(self, row: int, col: int, visited: Set[int],
+                   inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
+                   previous_board: Optional[List[List[int]]] = None):
+        owner = self._cell_at(row, col, inactive_conversions, previous_board)
         if owner not in (P1, P2):
             return None
         group = []
@@ -189,7 +310,7 @@ class TetrisWeiqi:
                 k = nr * self.size + nc
                 if k in visited:
                     continue
-                cell = self.board[nr][nc]
+                cell = self._cell_at(nr, nc, inactive_conversions, previous_board)
                 if cell == EMPTY:
                     liberties.add(k)
                 elif cell == owner:
@@ -197,30 +318,34 @@ class TetrisWeiqi:
                     stack.append((nr, nc))
         return {'owner': owner, 'group': group, 'liberties': len(liberties)}
 
-    def _capture_groups_of(self, target: int) -> int:
+    def _capture_groups_of(self, target: int,
+                           inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
+                           previous_board: Optional[List[List[int]]] = None) -> int:
         dead_mark = DEAD1 if target == P1 else DEAD2
         visited = set()
         total = 0
         for r in range(self.size):
             for c in range(self.size):
                 k = r * self.size + c
-                if k in visited or self.board[r][c] != target:
+                if k in visited or self._cell_at(r, c, inactive_conversions, previous_board) != target:
                     continue
-                g = self._get_group(r, c, visited)
+                g = self._get_group(r, c, visited, inactive_conversions, previous_board)
                 if g and g['liberties'] == 0:
                     for gr, gc in g['group']:
                         self.board[gr][gc] = dead_mark
                     total += len(g['group'])
         return total
 
-    def _has_dead_groups(self, player: int) -> bool:
+    def _has_dead_groups(self, player: int,
+                         inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
+                         previous_board: Optional[List[List[int]]] = None) -> bool:
         visited = set()
         for r in range(self.size):
             for c in range(self.size):
                 k = r * self.size + c
-                if k in visited or self.board[r][c] != player:
+                if k in visited or self._cell_at(r, c, inactive_conversions, previous_board) != player:
                     continue
-                g = self._get_group(r, c, visited)
+                g = self._get_group(r, c, visited, inactive_conversions, previous_board)
                 if g and g['liberties'] == 0:
                     return True
         return False
@@ -236,15 +361,19 @@ class TetrisWeiqi:
         # 死区 (DEAD1, DEAD2): 取决于规则配置
         return self.dead_zone_fills_line
 
-    def _check_line_clears(self) -> int:
+    def _check_line_clears(self,
+                           inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
+                           previous_board: Optional[List[List[int]]] = None) -> int:
         cleared = 0
         for r in range(self.size):
-            if all(self._cell_fills_line(self.board[r][c]) for c in range(self.size)):
+            if all(self._cell_fills_line(self._cell_at(r, c, inactive_conversions, previous_board))
+                   for c in range(self.size)):
                 for c in range(self.size):
                     self.board[r][c] = EMPTY
                 cleared += 1
         for c in range(self.size):
-            if all(self._cell_fills_line(self.board[r][c]) for r in range(self.size)):
+            if all(self._cell_fills_line(self._cell_at(r, c, inactive_conversions, previous_board))
+                   for r in range(self.size)):
                 for r in range(self.size):
                     self.board[r][c] = EMPTY
                 cleared += 1
@@ -261,18 +390,75 @@ class TetrisWeiqi:
         return sum(1 for r in range(self.size) for c in range(self.size)
                    if self.board[r][c] == dead_cell)
 
+    def bag_piece_counts(self, player: Optional[int] = None) -> Dict[str, int]:
+        counts = {name: 0 for name in PIECE_NAMES}
+        if self.piece_distribution == 'bag7_independent':
+            bag = self._player_piece_bags[player if player is not None else self.current_player]
+        else:
+            bag = self._piece_bag
+        for name in bag:
+            counts[name] += 1
+        return counts
+
+    def final_score(self, player: int) -> float:
+        return self.count_pieces(player) + self.score_dead_zone_weight * self.count_dead_zones(player)
+
+    def terminal_tuple(self, player: int) -> Tuple[float, float]:
+        pieces = float(self.count_pieces(player))
+        dead_zones = float(self.count_dead_zones(player))
+        if self.terminal_mode == 'pieces_then_deadzones':
+            return (pieces, dead_zones)
+        if self.terminal_mode == 'area_like':
+            return (pieces + dead_zones, 0.0)
+        return (pieces, 0.0)
+
     # --- Game Flow ---
 
-    def place_piece(self, cells, row: int, col: int, player: int) -> Dict:
-        for dr, dc in cells:
-            self.board[row + dr][col + dc] = player
-        captured = self._capture_groups_of(P2 if player == P1 else P1)
-        self._capture_groups_of(player)  # 安全检查
-        lines_cleared = self._check_line_clears()
-        if lines_cleared > 0:
-            self._capture_groups_of(P2 if player == P1 else P1)
-            self._capture_groups_of(player)
+    def _resolve_placement_effects(self, player: int, allow_self_capture: bool = True,
+                                   converted_cells: Optional[Set[Tuple[int, int]]] = None,
+                                   previous_board: Optional[List[List[int]]] = None) -> Dict:
+        opponent = P2 if player == P1 else P1
+        captured = 0
+        lines_cleared = 0
+        inactive = None
+        prior = None
+        if self.dead_zone_activation_mode == 'next_turn' and converted_cells and previous_board is not None:
+            inactive = converted_cells
+            prior = previous_board
+
+        if self.resolution_mode == 'clear_then_capture':
+            lines_cleared = self._check_line_clears(inactive, prior)
+            captured += self._capture_groups_of(opponent, inactive, prior)
+            if allow_self_capture:
+                self._capture_groups_of(player, inactive, prior)
+            return {'captured': captured, 'lines_cleared': lines_cleared}
+
+        captured += self._capture_groups_of(opponent, inactive, prior)
+        if allow_self_capture:
+            self._capture_groups_of(player, inactive, prior)
+        lines_cleared = self._check_line_clears(inactive, prior)
+
+        if self.resolution_mode == 'capture_then_clear_recheck' and lines_cleared > 0:
+            captured += self._capture_groups_of(opponent, inactive, prior)
+            if allow_self_capture:
+                self._capture_groups_of(player, inactive, prior)
+
         return {'captured': captured, 'lines_cleared': lines_cleared}
+
+    def place_piece(self, cells, row: int, col: int, player: int) -> Dict:
+        snapshot = [r[:] for r in self.board]
+        converted_cells = set()
+        for dr, dc in cells:
+            rr, cc = row + dr, col + dc
+            if self.board[rr][cc] in (DEAD1, DEAD2):
+                converted_cells.add((rr, cc))
+            self.board[rr][cc] = player
+        return self._resolve_placement_effects(
+            player,
+            allow_self_capture=True,
+            converted_cells=converted_cells,
+            previous_board=snapshot
+        )
 
     def do_move(self, rot: int, row: int, col: int) -> Dict:
         """执行一步着法，返回结果"""
@@ -314,32 +500,53 @@ class TetrisWeiqi:
     def do_skip(self) -> Dict:
         if self.game_over:
             return {'error': 'game is over'}
+        if not self.allow_voluntary_skip and self.can_place_anywhere(self.current_player):
+            return {'error': 'voluntary skip disabled'}
+        return self._handle_forced_no_move(self.current_player, reason='skip')
+
+    def _handle_forced_no_move(self, player: int, reason: str = 'forced_pass') -> Dict:
         self.skip_count += 1
-        player = self.current_player
         self._generate_piece(player)
         self.history.append({
             'move': self.move_number + 1,
             'player': player,
-            'action': 'skip',
+            'action': reason,
         })
         self.move_number += 1
-        if self.skip_count >= 2:
+        if self.end_condition_mode == 'single_forced_pass' or self.skip_count >= 2:
             self._end_game()
             return {'ok': True, 'game_over': True}
         self._next_turn()
         return {'ok': True}
 
+    def _resolve_no_legal_move(self, player: int) -> bool:
+        if self.can_place_anywhere(player):
+            return True
+
+        if self.no_legal_move_mode == 'reroll_once_then_pass':
+            for reroll_idx in range(self.no_legal_move_rerolls):
+                self._generate_piece(player)
+                self.history.append({
+                    'move': self.move_number,
+                    'player': player,
+                    'action': 'reroll_no_move',
+                    'reroll_index': reroll_idx + 1,
+                })
+                if self.can_place_anywhere(player):
+                    return True
+
+        self.current_player = player
+        self._handle_forced_no_move(player)
+        return False
+
     def _next_turn(self):
         self.current_player = P2 if self.current_player == P1 else P1
-        if not self.can_place_anywhere(self.current_player):
-            self._generate_piece(self.current_player)
-            if not self.can_place_anywhere(self.current_player):
-                self._end_game()
+        self._resolve_no_legal_move(self.current_player)
 
     def _end_game(self):
         self.game_over = True
-        s1 = self.count_pieces(P1)
-        s2 = self.count_pieces(P2)
+        s1 = self.terminal_tuple(P1)
+        s2 = self.terminal_tuple(P2)
         if s1 > s2:
             self.winner = P1
         elif s2 > s1:
@@ -367,6 +574,19 @@ class TetrisWeiqi:
                 'p2_pieces': self.count_pieces(P2),
                 'p1_dead_zones': self.count_dead_zones(P1),
                 'p2_dead_zones': self.count_dead_zones(P2),
+                'p1_final_score': self.final_score(P1),
+                'p2_final_score': self.final_score(P2),
+                'bag_counts': self.bag_piece_counts(),
+                'piece_distribution': self.piece_distribution,
+                'terminal_mode': self.terminal_mode,
+                'allow_voluntary_skip': self.allow_voluntary_skip,
+                'end_condition_mode': self.end_condition_mode,
+                'no_legal_move_mode': self.no_legal_move_mode,
+                'resolution_mode': self.resolution_mode,
+                'dead_zone_activation_mode': self.dead_zone_activation_mode,
+                'no_legal_move_rerolls': self.no_legal_move_rerolls,
+                'p1_terminal_tuple': self.terminal_tuple(P1),
+                'p2_terminal_tuple': self.terminal_tuple(P2),
             },
             'legal_move_count': len(self.get_legal_moves(player)) if not self.game_over else 0,
         }
@@ -702,8 +922,28 @@ class TetrisWeiqiEnv:
     reward: +1 win, -1 lose, 0 ongoing, +0.1 per capture
     """
 
-    def __init__(self, size=10, opponent='heuristic', opponent_level=2, seed=None):
-        self.game = TetrisWeiqi(size, seed)
+    def __init__(self, size=10, opponent='heuristic', opponent_level=2, seed=None,
+                 dead_zone_fills_line: bool = True, score_dead_zone_weight: float = 0.0,
+                 piece_distribution: str = 'bag7', terminal_mode: str = 'pieces_only',
+                 allow_voluntary_skip: bool = False,
+                 end_condition_mode: str = 'double_forced_pass',
+                 no_legal_move_mode: str = 'reroll_once_then_pass',
+                 resolution_mode: str = 'capture_then_clear_recheck',
+                 dead_zone_activation_mode: str = 'immediate',
+                 no_legal_move_rerolls: int = 1):
+        self.game = TetrisWeiqi(
+            size, seed,
+            dead_zone_fills_line=dead_zone_fills_line,
+            score_dead_zone_weight=score_dead_zone_weight,
+            piece_distribution=piece_distribution,
+            terminal_mode=terminal_mode,
+            allow_voluntary_skip=allow_voluntary_skip,
+            end_condition_mode=end_condition_mode,
+            no_legal_move_mode=no_legal_move_mode,
+            resolution_mode=resolution_mode,
+            dead_zone_activation_mode=dead_zone_activation_mode,
+            no_legal_move_rerolls=no_legal_move_rerolls
+        )
         self.opponent = SimpleAI(opponent_level) if opponent == 'heuristic' else None
         self.player = P1  # 训练的玩家始终为 P1
 
@@ -769,9 +1009,46 @@ def main():
                         help='selfplay模式对局数')
     parser.add_argument('--output', type=str, default=None,
                         help='selfplay模式棋谱输出文件')
+    parser.add_argument('--dead-zone-fills-line', type=parse_bool_flag, default=True,
+                        help='死区是否参与消行判定: true/false (默认 true)')
+    parser.add_argument('--score-dead-zone-weight', type=float, default=0.0,
+                        help='终局计分时死区权重，默认 0.0')
+    parser.add_argument('--piece-distribution', type=parse_piece_distribution, default='bag7',
+                        help='方块发牌模式: uniform / bag7 / bag7_independent (默认 bag7)')
+    parser.add_argument('--terminal-mode', type=parse_terminal_mode, default='pieces_only',
+                        help='终局判定: pieces_only / pieces_then_deadzones / area_like')
+    parser.add_argument('--allow-voluntary-skip', type=parse_bool_flag, default=False,
+                        help='是否允许玩家在仍有合法着法时主动 skip: true/false (默认 false)')
+    parser.add_argument('--end-condition-mode', type=parse_end_condition_mode,
+                        default='double_forced_pass',
+                        help='终局触发: double_forced_pass 或 single_forced_pass')
+    parser.add_argument('--no-legal-move-mode', type=parse_no_legal_move_mode,
+                        default='reroll_once_then_pass',
+                        help='无合法着法处理: pass_and_redraw 或 reroll_once_then_pass (默认 reroll_once_then_pass)')
+    parser.add_argument('--resolution-mode', type=parse_resolution_mode,
+                        default='capture_then_clear_recheck',
+                        help='结算顺序: capture_then_clear_recheck / clear_then_capture / capture_then_clear_once')
+    parser.add_argument('--dead-zone-activation-mode', type=parse_dead_zone_activation_mode,
+                        default='immediate',
+                        help='死区转化生效时序: immediate 或 next_turn')
+    parser.add_argument('--no-legal-move-rerolls', type=parse_non_negative_int, default=1,
+                        help='无合法着法时最多额外重抽几次，仅在 reroll_once_then_pass 模式下生效')
     args = parser.parse_args()
 
-    game = TetrisWeiqi(size=args.size, seed=args.seed)
+    game = TetrisWeiqi(
+        size=args.size,
+        seed=args.seed,
+        dead_zone_fills_line=args.dead_zone_fills_line,
+        score_dead_zone_weight=args.score_dead_zone_weight,
+        piece_distribution=args.piece_distribution,
+        terminal_mode=args.terminal_mode,
+        allow_voluntary_skip=args.allow_voluntary_skip,
+        end_condition_mode=args.end_condition_mode,
+        no_legal_move_mode=args.no_legal_move_mode,
+        resolution_mode=args.resolution_mode,
+        dead_zone_activation_mode=args.dead_zone_activation_mode,
+        no_legal_move_rerolls=args.no_legal_move_rerolls
+    )
 
     if args.mode == 'pvai':
         interactive_mode(game, ai_player=P2, ai_level=args.ai_level)
