@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>俄罗斯方块棋 Tetris Weiqi</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -238,6 +239,7 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
     <option value="1">简单</option>
     <option value="2" selected>普通</option>
     <option value="3">困难</option>
+    <option value="4">神经网络</option>
   </select>
   <button class="primary" onclick="startGame()">开始游戏</button>
   <button class="rotate-btn" onclick="rotatePiece()">旋转(R)</button>
@@ -300,7 +302,10 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
     <h2 id="gameOverTitle">游戏结束</h2>
     <div class="result" id="gameOverResult"></div>
     <div class="detail" id="gameOverDetail"></div>
-    <button class="primary" onclick="closeOverlay(); startGame();">再来一局</button>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <button class="primary" onclick="exportGameRecord()">导出棋谱</button>
+      <button class="primary" onclick="closeOverlay(); startGame();">再来一局</button>
+    </div>
   </div>
 </div>
 
@@ -339,8 +344,16 @@ let gameMode = 'pvai';
 let ghostPos = null;
 let rotation = 0;
 let skipCount = 0;
+let bag = []; // shared bag7
+let moveHistory = []; // 棋谱记录
 
 let boardCanvas, boardCtx, previewP1, prevCtx1, previewP2, prevCtx2;
+
+// ONNX Neural Network AI
+let onnxSession = null;
+let onnxLoading = false;
+const ONNX_MODEL_PATH = 'checkpoints_m5_mps/best_browser.onnx';
+const INPUT_CHANNELS = 22;
 
 // ============================================================
 // Init
@@ -408,6 +421,9 @@ function startGame() {
   currentPlayer = P1;
   rotation = 0;
   skipCount = 0;
+  bag = [];
+  refillBag();
+  moveHistory = [];
   gameActive = true;
   generatePiece(P1);
   generatePiece(P2);
@@ -419,9 +435,25 @@ function startGame() {
 // ============================================================
 // Pieces
 // ============================================================
+function refillBag() {
+  bag = [...PIECE_NAMES];
+  for (let i = bag.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [bag[i], bag[j]] = [bag[j], bag[i]];
+  }
+}
+
 function generatePiece(player) {
-  const name = PIECE_NAMES[Math.floor(Math.random() * PIECE_NAMES.length)];
+  if (bag.length === 0) refillBag();
+  const name = bag.pop();
   pieces[player] = { name, cells: PIECE_SHAPES[name].map(c => [...c]) };
+}
+
+function bagPieceCounts() {
+  const counts = {};
+  for (const n of PIECE_NAMES) counts[n] = 0;
+  for (const n of bag) counts[n]++;
+  return counts;
 }
 
 function getRotatedCells(cells, rot) {
@@ -651,9 +683,19 @@ function nextTurn() {
   ghostPos = null;
 
   if (!canPlaceAnywhere(currentPlayer, pieces[currentPlayer].cells)) {
+    // reroll_once_then_pass: 重抽一次，仍不行则跳过
     generatePiece(currentPlayer);
     if (!canPlaceAnywhere(currentPlayer, pieces[currentPlayer].cells)) {
-      endGame();
+      skipCount++;
+      moveHistory.push({
+        turn: moveHistory.length + 1,
+        player: currentPlayer,
+        type: 'auto_skip'
+      });
+      if (skipCount >= 2) { endGame(); return; }
+      setStatus(playerName(currentPlayer) + ' 无法落子，跳过');
+      generatePiece(currentPlayer);
+      nextTurn();
       return;
     }
   }
@@ -671,6 +713,11 @@ function skipTurn() {
   if (!gameActive) return;
   if (gameMode === 'pvai' && currentPlayer === P2) return;
   skipCount++;
+  moveHistory.push({
+    turn: moveHistory.length + 1,
+    player: currentPlayer,
+    type: 'skip'
+  });
   generatePiece(currentPlayer);
   if (skipCount >= 2) { endGame(); return; }
   setStatus(playerName(currentPlayer) + ' 跳过了回合');
@@ -707,6 +754,7 @@ function closeOverlay() {
 function aiMove() {
   if (!gameActive || currentPlayer !== P2) return;
   const aiLevel = parseInt(document.getElementById('aiLevelSelect').value);
+  if (aiLevel === 4) { neuralNetworkMove(); return; }
   const piece = pieces[P2];
   let bestScore = -Infinity;
   let bestMoves = [];
@@ -749,8 +797,20 @@ function aiMove() {
 
   const move = bestMoves[Math.floor(Math.random() * bestMoves.length)];
   rotation = move.rot;
+  const aiPieceName = pieces[P2].name;
   const result = placePiece(move.cells, move.row, move.col, P2);
   skipCount = 0;
+  moveHistory.push({
+    turn: moveHistory.length + 1,
+    player: P2,
+    piece: aiPieceName,
+    rotation: move.rot,
+    row: move.row,
+    col: move.col,
+    captured: result.captured,
+    linesCleared: result.linesCleared,
+    type: 'place'
+  });
 
   let msg = 'AI 落子';
   if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
@@ -804,6 +864,151 @@ function evaluateAI(row, col, cells, captured, linesCleared, level) {
 
   score += Math.random() * 0.5;
   return score;
+}
+
+// ============================================================
+// Neural Network AI (ONNX)
+// ============================================================
+async function loadOnnxModel() {
+  if (onnxSession || onnxLoading) return onnxSession;
+  onnxLoading = true;
+  setStatus('加载神经网络模型...');
+  try {
+    onnxSession = await ort.InferenceSession.create(ONNX_MODEL_PATH);
+    console.log('ONNX model loaded');
+  } catch (e) {
+    console.error('ONNX load failed:', e);
+    setStatus('模型加载失败，回退到启发式AI');
+    onnxLoading = false;
+    return null;
+  }
+  onnxLoading = false;
+  return onnxSession;
+}
+
+function encodeState(player) {
+  const S = BOARD_SIZE;
+  const data = new Float32Array(INPUT_CHANNELS * S * S);
+  const opponent = player === P1 ? P2 : P1;
+
+  // Channels 0-4: board one-hot (from current player's perspective)
+  for (let r = 0; r < S; r++) {
+    for (let c = 0; c < S; c++) {
+      const cell = board[r][c];
+      const offset = r * S + c;
+      if (cell === EMPTY)    data[0 * S * S + offset] = 1;
+      else if (cell === player)   data[1 * S * S + offset] = 1;
+      else if (cell === opponent) data[2 * S * S + offset] = 1;
+      else if (cell === DEAD1)    data[3 * S * S + offset] = 1;
+      else if (cell === DEAD2)    data[4 * S * S + offset] = 1;
+    }
+  }
+
+  // Channels 5-11: current piece one-hot
+  const piece = pieces[player];
+  if (piece) {
+    const pidx = PIECE_NAMES.indexOf(piece.name);
+    const ch = 5 + pidx;
+    for (let i = 0; i < S * S; i++) data[ch * S * S + i] = 1;
+  }
+
+  // Channels 12-18: bag remaining counts (normalized by 7)
+  const bagCounts = bagPieceCounts();
+  for (let i = 0; i < PIECE_NAMES.length; i++) {
+    const val = bagCounts[PIECE_NAMES[i]] / 7.0;
+    const ch = 12 + i;
+    for (let j = 0; j < S * S; j++) data[ch * S * S + j] = val;
+  }
+
+  // Channel 19: bag7 mode indicator (always 1 in web version)
+  for (let i = 0; i < S * S; i++) data[19 * S * S + i] = 1;
+
+  // Channel 20-21: player indicator
+  const isP1 = player === P1 ? 1 : 0;
+  for (let i = 0; i < S * S; i++) {
+    data[20 * S * S + i] = isP1;
+    data[21 * S * S + i] = 1 - isP1;
+  }
+
+  return data;
+}
+
+async function neuralNetworkMove() {
+  const session = await loadOnnxModel();
+  if (!session) { aiMove(); return; } // fallback
+
+  const S = BOARD_SIZE;
+  const stateData = encodeState(P2);
+  const inputTensor = new ort.Tensor('float32', stateData, [1, INPUT_CHANNELS, S, S]);
+
+  const results = await session.run({ state: inputTensor });
+  const policyLogits = results.policy.data; // Float32Array(400)
+
+  // Collect legal moves and their policy scores
+  const piece = pieces[P2];
+  let candidates = [];
+  for (let rot = 0; rot < 4; rot++) {
+    const cells = getRotatedCells(piece.cells, rot);
+    for (let r = 0; r < S; r++) {
+      for (let c = 0; c < S; c++) {
+        if (!isLegalMove(cells, r, c, P2)) continue;
+        const actionIdx = rot * S * S + r * S + c;
+        candidates.push({ rot, row: r, col: c, cells, score: policyLogits[actionIdx] });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    skipCount++;
+    generatePiece(P2);
+    if (skipCount >= 2) { endGame(); return; }
+    nextTurn();
+    return;
+  }
+
+  // Softmax over legal moves and sample (temperature=0.5 for slight variety)
+  const temperature = 0.5;
+  const maxScore = Math.max(...candidates.map(c => c.score));
+  let expSum = 0;
+  for (const c of candidates) {
+    c.prob = Math.exp((c.score - maxScore) / temperature);
+    expSum += c.prob;
+  }
+  for (const c of candidates) c.prob /= expSum;
+
+  // Weighted random selection
+  let rand = Math.random();
+  let move = candidates[candidates.length - 1];
+  for (const c of candidates) {
+    rand -= c.prob;
+    if (rand <= 0) { move = c; break; }
+  }
+
+  rotation = move.rot;
+  const nnPieceName = pieces[P2].name;
+  const result = placePiece(move.cells, move.row, move.col, P2);
+  skipCount = 0;
+  moveHistory.push({
+    turn: moveHistory.length + 1,
+    player: P2,
+    piece: nnPieceName,
+    rotation: move.rot,
+    row: move.row,
+    col: move.col,
+    captured: result.captured,
+    linesCleared: result.linesCleared,
+    type: 'place'
+  });
+
+  let msg = 'AI(神经网络) 落子';
+  if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
+  if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
+  setStatus(msg);
+
+  generatePiece(P2);
+  updatePanels();
+  render();
+  setTimeout(() => nextTurn(), 500);
 }
 
 // ============================================================
@@ -944,8 +1149,20 @@ function confirmPlace() {
 
 function doPlace() {
   const cells = getCurrentCells();
+  const pieceName = pieces[currentPlayer].name;
   const result = placePiece(cells, ghostPos.row, ghostPos.col, currentPlayer);
   skipCount = 0;
+  moveHistory.push({
+    turn: moveHistory.length + 1,
+    player: currentPlayer,
+    piece: pieceName,
+    rotation: rotation,
+    row: ghostPos.row,
+    col: ghostPos.col,
+    captured: result.captured,
+    linesCleared: result.linesCleared,
+    type: 'place'
+  });
 
   let msg = playerName(currentPlayer) + ' 落子';
   if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
@@ -978,8 +1195,8 @@ function render() {
   }
 
   // Cells
-  for (let r = 0; r < BOARD_SIZE; r++)
-    for (let c = 0; c < BOARD_SIZE; c++)
+  for (let r = 0; r < board.length; r++)
+    for (let c = 0; c < (board[r] ? board[r].length : 0); c++)
       if (board[r][c] !== EMPTY) drawCell(ctx, r, c, board[r][c]);
 
   // Ghost
@@ -1057,6 +1274,113 @@ function setStatus(msg) {
 function playerName(p) {
   if (p === P1) return '玩家1(蓝)';
   return gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)';
+}
+
+// ============================================================
+// Game Record Export (棋谱导出)
+// ============================================================
+function exportGameRecord() {
+  const s1 = countPieces(P1), s2 = countPieces(P2);
+  const d1 = countDeadZones(P1), d2 = countDeadZones(P2);
+  const aiLevelNames = { 1: '简单', 2: '中等', 3: '困难', 4: '神经网络' };
+  const aiLevel = parseInt(document.getElementById('aiLevelSelect').value);
+
+  const now = new Date();
+  const dateStr = now.getFullYear() + '-' +
+    String(now.getMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0') + ' ' +
+    String(now.getHours()).padStart(2, '0') + ':' +
+    String(now.getMinutes()).padStart(2, '0') + ':' +
+    String(now.getSeconds()).padStart(2, '0');
+
+  let lines = [];
+  lines.push('╔══════════════════════════════════════╗');
+  lines.push('║       俄罗斯方块棋 - 棋谱记录         ║');
+  lines.push('╚══════════════════════════════════════╝');
+  lines.push('');
+  lines.push(`日期: ${dateStr}`);
+  lines.push(`棋盘: ${BOARD_SIZE}×${BOARD_SIZE}`);
+  lines.push(`模式: ${gameMode === 'pvai' ? '人机对战' : '双人对战'}`);
+  if (gameMode === 'pvai') {
+    lines.push(`AI等级: ${aiLevelNames[aiLevel] || aiLevel}`);
+  }
+  lines.push('');
+
+  // Result
+  let winner;
+  if (s1 > s2) winner = '玩家1(蓝) 获胜';
+  else if (s2 > s1) winner = (gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)') + ' 获胜';
+  else winner = '平局';
+  lines.push(`结果: ${winner}`);
+  lines.push(`玩家1(蓝): ${s1} 方块` + (d1 ? `, ${d1} 围杀` : ''));
+  lines.push(`${gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)'}: ${s2} 方块` + (d2 ? `, ${d2} 围杀` : ''));
+  lines.push('');
+
+  // Move table
+  lines.push('──── 对局过程 ────');
+  lines.push('');
+  const colName = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+  for (const m of moveHistory) {
+    const pName = m.player === P1 ? 'P1(蓝)' : (gameMode === 'pvai' ? 'AI(紫)' : 'P2(紫)');
+    const turnStr = String(m.turn).padStart(3, ' ');
+
+    if (m.type === 'skip') {
+      lines.push(`${turnStr}. ${pName}  跳过`);
+    } else if (m.type === 'auto_skip') {
+      lines.push(`${turnStr}. ${pName}  无法落子，自动跳过`);
+    } else {
+      const pos = colName[m.col] + (m.row + 1);
+      let detail = `${turnStr}. ${pName}  ${m.piece} R${m.rotation} → ${pos}`;
+      if (m.captured > 0) detail += `  围杀${m.captured}子`;
+      if (m.linesCleared > 0) detail += `  消${m.linesCleared}行`;
+      lines.push(detail);
+    }
+  }
+
+  lines.push('');
+  lines.push(`共 ${moveHistory.length} 手`);
+
+  // Board snapshot
+  lines.push('');
+  lines.push('──── 终局棋盘 ────');
+  lines.push('');
+  let header = '   ';
+  for (let c = 0; c < BOARD_SIZE; c++) header += ' ' + colName[c];
+  lines.push(header);
+
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    let row = String(r + 1).padStart(2, ' ') + ' ';
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const v = board[r][c];
+      if (v === P1) row += ' ●';
+      else if (v === P2) row += ' ◆';
+      else if (v === DEAD1) row += ' ×';
+      else if (v === DEAD2) row += ' ✦';
+      else row += ' ·';
+    }
+    lines.push(row);
+  }
+  lines.push('');
+  lines.push('图例: ● = P1(蓝)  ◆ = P2(紫)  × = P1围杀  ✦ = P2围杀  · = 空');
+
+  const text = lines.join('\n');
+
+  // Download as text file
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const fileDate = now.getFullYear() +
+    String(now.getMonth() + 1).padStart(2, '0') +
+    String(now.getDate()).padStart(2, '0') + '_' +
+    String(now.getHours()).padStart(2, '0') +
+    String(now.getMinutes()).padStart(2, '0');
+  a.download = `TetrisWeiqi_${fileDate}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================

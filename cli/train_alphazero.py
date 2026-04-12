@@ -58,6 +58,8 @@ def configure_torch_runtime(device: torch.device):
 def get_autocast_dtype(device: torch.device):
     if device.type == 'cuda':
         return torch.float16
+    if device.type == 'mps':
+        return torch.float16
     if device.type == 'cpu':
         return torch.bfloat16
     return None
@@ -311,7 +313,7 @@ class MCTS:
         self.c_puct = c_puct
         self.temperature = temperature
         self.device = device
-        self.use_amp = use_amp and device.type == 'cuda'
+        self.use_amp = use_amp and device.type in ('cuda', 'mps')
         self.inference_batch_size = max(1, inference_batch_size)
 
     @torch.no_grad()
@@ -756,7 +758,7 @@ def train_step(model: PolicyValueNet, optimizer, states, target_policies,
     target_v = torch.from_numpy(target_values).unsqueeze(1).to(device, non_blocking=non_blocking)
 
     optimizer.zero_grad()
-    with autocast_context(device, use_amp and scaler is not None):
+    with autocast_context(device, use_amp):
         policy_logits, value = model(states_t)
         log_policy = F.log_softmax(policy_logits, dim=1)
 
@@ -1125,7 +1127,7 @@ def run_selfplay_batch(model: PolicyValueNet, optimizer, replay_buffer: ReplayBu
 def benchmark(args):
     device = get_device(args.device)
     configure_torch_runtime(device)
-    use_amp = args.amp and device.type == 'cuda'
+    use_amp = args.amp and device.type in ('cuda', 'mps')
 
     parallel_games_list = parse_int_list(args.benchmark_parallel_games)
     infer_batch_list = parse_int_list(args.benchmark_inference_batches)
@@ -1154,6 +1156,8 @@ def benchmark(args):
         if device.type == 'cuda':
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats(device)
+        elif device.type == 'mps':
+            torch.mps.empty_cache()
 
         model = PolicyValueNet(
             board_size=BOARD_SIZE,
@@ -1163,7 +1167,7 @@ def benchmark(args):
         model, compile_enabled = maybe_compile_model(model, args.compile)
         optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
         replay_buffer = ReplayBuffer(max(args.buffer_size, args.games_per_iter * 128))
-        scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp)
+        scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp and device.type == 'cuda')
 
         print(f'[Case {idx}/{len(combos)}] parallel={parallel_games} '
               f'infer_batch={infer_batch} train_batch={train_batch} '
@@ -1243,7 +1247,7 @@ def benchmark(args):
 def benchmark_rule_ab(args):
     device = get_device(args.device)
     configure_torch_runtime(device)
-    use_amp = args.amp and device.type == 'cuda'
+    use_amp = args.amp and device.type in ('cuda', 'mps')
     variants = [
         ('A', True),
         ('B', False),
@@ -1268,7 +1272,7 @@ def benchmark_rule_ab(args):
         model, compile_enabled = maybe_compile_model(model, args.compile)
         optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
         replay_buffer = ReplayBuffer(max(args.buffer_size, args.games_per_iter * 128))
-        scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp)
+        scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp and device.type == 'cuda')
 
         print(f'[RuleAB {label}] dead_zone_fills_line={flag} compile={compile_enabled}')
         metrics = run_selfplay_batch(
@@ -1340,8 +1344,8 @@ def train(args):
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.8)
     replay_buffer = ReplayBuffer(args.buffer_size)
-    use_amp = args.amp and device.type == 'cuda'
-    scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp)
+    use_amp = args.amp and device.type in ('cuda', 'mps')
+    scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp and device.type == 'cuda')
     eval_report_path = os.path.join(args.save_dir, args.eval_report_name)
 
     start_iter = 0
@@ -1594,7 +1598,7 @@ def eval_model(args):
         result = evaluate_vs_heuristic(
             model, num_games=args.eval_games,
             num_simulations=args.eval_num_simulations,
-            ai_level=level, device=device, use_amp=args.amp and device.type == 'cuda',
+            ai_level=level, device=device, use_amp=args.amp and device.type in ('cuda', 'mps'),
             inference_batch_size=args.inference_batch_size,
             dead_zone_fills_line=args.dead_zone_fills_line,
             score_dead_zone_weight=args.score_dead_zone_weight,
