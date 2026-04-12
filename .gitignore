@@ -2,3 +2,18 @@
 __pycache__/
 *.pyc
 .claude/
+
+# Python environments and caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Training outputs
+checkpoints*/
+
+# Generated analysis and benchmark artifacts
+cli/*.json
+!cli/benchmark_mainline_c_v2.json
