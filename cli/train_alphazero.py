@@ -1347,7 +1347,11 @@ def train(args):
     model, compile_enabled = maybe_compile_model(model, args.compile)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.8)
+    scheduler = optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=args.lr_step_size,
+        gamma=args.lr_gamma
+    )
     replay_buffer = ReplayBuffer(args.buffer_size)
     use_amp = args.amp and device.type in ('cuda', 'mps')
     scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp and device.type == 'cuda')
@@ -1364,13 +1368,21 @@ def train(args):
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt['model'])
         optimizer.load_state_dict(ckpt['optimizer'])
+        scheduler_state = ckpt.get('scheduler')
+        if scheduler_state is not None:
+            scheduler.load_state_dict(scheduler_state)
         start_iter = ckpt.get('iteration', 0)
         best_winrate = ckpt.get('best_winrate', 0)
+        saved_best_model = ckpt.get('best_model_state')
+        source_state = saved_best_model if saved_best_model is not None else ckpt['model']
         best_model_state = {
             key: value.detach().cpu().clone()
-            for key, value in ckpt['model'].items()
+            for key, value in source_state.items()
         }
         print(f'[Resume] 从 {args.resume} 恢复, iteration={start_iter}')
+        if scheduler_state is None:
+            print('[Resume] 警告: 检查点未保存 scheduler 状态，学习率调度将从初始状态继续')
+        print('[Resume] 注意: 当前不会恢复 replay buffer，resume 属于暖启动续训，不是严格无缝续训')
 
     os.makedirs(args.save_dir, exist_ok=True)
 
@@ -1394,6 +1406,10 @@ def train(args):
           f'games/iter={args.games_per_iter}, '
           f'simulations={args.num_simulations}, '
           f'batch={args.batch_size}, '
+          f'lr={args.lr}, '
+          f'lr_step={args.lr_step_size}, '
+          f'lr_gamma={args.lr_gamma}, '
+          f'buffer={args.buffer_size}, '
           f'train_steps={args.train_steps_per_iter if args.train_steps_per_iter > 0 else "auto"}, '
           f'min_train_batches={args.min_train_batches}, '
           f'eval_sims={args.eval_num_simulations}, '
@@ -1542,8 +1558,10 @@ def train(args):
                 torch.save({
                     'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
                     'iteration': iteration + 1,
                     'best_winrate': best_winrate,
+                    'best_model_state': best_model_state,
                     'last_heuristic_eval': heuristic_eval,
                     'last_head_to_head': head_to_head,
                 }, path)
@@ -1555,8 +1573,10 @@ def train(args):
             torch.save({
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
                 'iteration': iteration + 1,
                 'best_winrate': best_winrate,
+                'best_model_state': best_model_state,
                 'last_heuristic_eval': last_heuristic_eval,
                 'last_head_to_head': last_head_to_head,
             }, path)
@@ -1673,6 +1693,8 @@ def main():
     p.add_argument('--num-simulations', type=int, default=50, help='MCTS模拟次数')
     p.add_argument('--batch-size', type=int, default=128, help='训练批大小')
     p.add_argument('--lr', type=float, default=0.002, help='学习率')
+    p.add_argument('--lr-step-size', type=int, default=10, help='学习率每隔多少轮衰减一次')
+    p.add_argument('--lr-gamma', type=float, default=0.8, help='学习率衰减系数')
     p.add_argument('--buffer-size', type=int, default=100000, help='经验回放缓冲大小')
     p.add_argument('--resume', type=str, default=None, help='恢复训练的检查点')
     p.add_argument('--device', type=str, default=None,

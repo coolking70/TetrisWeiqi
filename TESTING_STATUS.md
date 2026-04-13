@@ -1,462 +1,338 @@
 # TetrisWeiqi Testing Status
 
-Last updated: 2026-04-12
+Last updated: 2026-04-14
 
-## Current Mainline Rules
+## Current Go-Style Mainline Rules
 
 The current recommended mainline rules are:
 
 1. Board size: `10x10`
 2. Piece distribution: shared `bag7`
-3. Dead zones count as filled cells for line clears
-4. Terminal scoring: `pieces_only`
-5. Voluntary skip: disabled
-6. End condition: `double_forced_pass`
-7. No-legal-move handling: `reroll_once_then_pass`
-8. Resolution order: `capture_then_clear_recheck`
-9. Dead-zone conversion activation: `immediate`
-10. No-legal-move rerolls: `1`
+   Chinese: shared seven-bag piece distribution
+3. Terminal scoring: `pieces_only`
+   Chinese: final result compares only surviving piece counts
+4. Voluntary skip: disabled
+5. End condition: `double_forced_pass`
+   Chinese: the game ends after two consecutive forced passes
+6. No-legal-move handling: `reroll_once_then_pass`
+   Chinese: reroll once when no legal move exists, then forced pass if still blocked
+7. Resolution order: `capture_then_clear_once`
+   Chinese: capture first, then line clear, with no second capture recheck
+8. Capture style: Go-style removal to `EMPTY`
+   Chinese: surrounded groups are removed directly instead of becoming dead zones
+9. Local legality search: enabled
+   Chinese: optimized local search path is enabled for move legality and settlement checks
 
-## Rule Testing Summary
+## Mainline Direction Change
+
+The old dead-zone mainline is now archived as a future variant idea.
+
+The current mainline is the newer Go-style ruleset:
+
+1. Surrounded groups are removed directly.
+2. Dead-zone occupation/conversion is not part of the current mainline.
+3. Existing dead-zone-oriented terminal modes are no longer meaningful differentiators under the mainline.
+
+## Rule Testing Summary Under The Current Mainline
 
 ### Kept
 
-1. `bag7` stayed on the mainline after bag-state encoding was added to the network input.
-2. `pieces_only` stayed as the terminal mode. It remained the cleanest and safest objective.
-3. `reroll_once_then_pass` replaced the older no-legal-move handling and became the current mainline.
-4. `capture_then_clear_recheck` stayed as the preferred resolution order.
-5. Dead-zone activation stayed `immediate`.
-6. Shared `bag7` stayed preferred over independent per-player bags.
+1. `bag7` stayed on the mainline over `bag7_independent`.
+2. `pieces_only` stayed as the practical terminal objective.
+3. `reroll_once_then_pass` stayed preferred over `pass_and_redraw`.
+4. `capture_then_clear_once` became the preferred resolution order.
+5. Voluntary `skip` remains disabled.
+6. Board size remains `10x10`.
 
-### Dropped or Deprioritized
+### Archived Or Deprioritized
 
-1. Dead-zone score weight optimization was dropped to avoid numeric complexity.
-2. Voluntary `skip` was dropped and is now disabled by default.
-3. Terminal-mode variants such as `pieces_then_deadzones` and `area_like` did not beat `pieces_only`.
-4. `single_forced_pass` and the original `pass_and_redraw` line both lost to the current mainline package.
-5. Increasing no-legal-move rerolls from `1` to `2` made games longer and less balanced.
-6. Dead-zone activation `next_turn` did not show a strong enough signal to justify changing the mainline.
+1. Dead-zone scoring and dead-zone conversion are archived with the old dead-zone variant line.
+2. `pieces_then_deadzones` and the old `area_like` mode are not meaningful mainline candidates under Go-style capture.
+3. `pass_and_redraw` was dropped for the current mainline.
+4. `capture_then_clear_recheck` was dropped from mainline priority after Go-style testing.
+5. `bag7_independent` was dropped from mainline priority.
 
-## Main Rule Experiments
+## Current Rule Experiment Results
 
-### A/B/C Endgame Package Comparison
+### No-Legal-Move Handling
 
-These were tested under the fixed core rule set.
+Compared:
 
-1. `A_baseline`
-   `double_forced_pass + pass_and_redraw`
-2. `B_strict_end`
-   `single_forced_pass + pass_and_redraw`
-3. `C_reroll_buffer`
-   `double_forced_pass + reroll_once_then_pass`
+1. `reroll_once_then_pass`
+   Chinese: reroll once, then forced pass
+2. `pass_and_redraw`
+   Chinese: pass immediately and redraw for the next turn
 
-Reliable long-training comparison results:
+Heuristic screening with `200` games:
 
-1. `A_baseline`: best heuristic eval winrate `31.7%`
-2. `B_strict_end`: best heuristic eval winrate `33.3%`
-3. `C_reroll_buffer`: best heuristic eval winrate `40.8%`
-
-Conclusion:
-`C_reroll_buffer` became the new mainline.
-
-### Resolution Order Comparison
-
-Heuristic screening and short training were run for:
-
-1. `capture_then_clear_recheck`
-2. `clear_then_capture`
-3. `capture_then_clear_once`
+1. `reroll_once_then_pass`
+   - First-player winrate: `55.0%`
+   - Average moves: `47.9`
+   - Average line clears: `9.2`
+2. `pass_and_redraw`
+   - First-player winrate: `64.5%`
+   - Average moves: `33.7`
+   - Average line clears: `4.6`
 
 Short training result:
 
-1. `capture_then_clear_recheck`: best eval winrate `48.8%`
-2. `clear_then_capture`: best eval winrate `46.2%`
+1. `reroll_once_then_pass`: best eval winrate `37.5%`
+2. `pass_and_redraw`: best eval winrate `30.0%`
 
 Conclusion:
-Keep `capture_then_clear_recheck`.
+Keep `reroll_once_then_pass`.
 
-### Dead-Zone Activation Timing
+### Resolution Order
 
 Compared:
 
-1. `immediate`
-2. `next_turn`
+1. `capture_then_clear_recheck`
+   Chinese: capture first, clear lines second, then capture again if needed
+2. `clear_then_capture`
+   Chinese: clear lines first, then capture
+3. `capture_then_clear_once`
+   Chinese: capture first, clear lines second, no second capture recheck
 
-Heuristic comparison showed only very small differences.
+Heuristic screening with `200` games:
+
+1. `capture_then_clear_recheck`
+   - First-player winrate: `55.0%`
+   - Average moves: `47.9`
+2. `clear_then_capture`
+   - First-player winrate: `49.5%`
+   - Average moves: `53.0`
+3. `capture_then_clear_once`
+   - First-player winrate: `55.0%`
+   - Average moves: `47.9`
+
+Short training result:
+
+1. `capture_then_clear_recheck`: best eval winrate `22.5%`
+2. `clear_then_capture`: best eval winrate `35.0%`
+3. `capture_then_clear_once`: best eval winrate `42.5%`
 
 Conclusion:
-Keep `immediate`.
+Keep `capture_then_clear_once` as the current mainline candidate.
 
-### No-Legal-Move Rerolls
+### Piece Distribution
 
 Compared:
 
-1. `1` reroll
-2. `2` rerolls
-
-Heuristic comparison showed that `2` rerolls produced longer games and worse balance.
-
-Conclusion:
-Keep `1` reroll.
-
-### Piece Distribution Symmetry
-
-Compared:
-
-1. shared `bag7`
+1. `bag7`
+   Chinese: shared seven-bag distribution
 2. `bag7_independent`
+   Chinese: each player uses an independent seven-bag distribution
 
-Heuristic comparison showed that shared `bag7` kept richer interaction and remained preferred.
+Heuristic screening with `200` games:
+
+1. `bag7`
+   - First-player winrate: `55.0%`
+   - Average moves: `47.9`
+   - Average line clears: `9.2`
+2. `bag7_independent`
+   - First-player winrate: `60.0%`
+   - Average moves: `44.8`
+   - Average line clears: `8.3`
+
+Short training result:
+
+1. `bag7`: best eval winrate `45.0%`
+2. `bag7_independent`: best eval winrate `15.0%`
 
 Conclusion:
 Keep shared `bag7`.
 
-## Training and Evaluation Status
+## Performance And Safety Status
 
-### Latest Mainline Long Training
+### Rule Engine Optimization
 
-Directory:
-`checkpoints_mainline_c_v2`
+The current engine includes local-search and candidate-mark optimizations for:
 
-This run used:
+1. legal move generation
+2. capture checks
+3. line clear checks
 
-1. `24` self-play games per iteration
-2. `24` MCTS simulations
-3. `20` iterations
-4. `120` heuristic eval games every `5` iterations
-5. `40` head-to-head games against the current best model every eval cycle
+These optimizations significantly improved training throughput in local testing.
 
-Best heuristic eval result:
+### Consistency Guardrail
 
-1. Iteration `20`
-2. Winrate `40.8%`
-3. Record `49-65-6`
+Rule-consistency validation script:
 
-Evaluation history file:
-`checkpoints_mainline_c_v2/eval_history.jsonl`
+`cli/check_rule_consistency.py`
 
-Key evaluation trend:
+Recommended command:
 
-1. Iteration `5`: `36.7%`
-2. Iteration `10`: `38.3%`
-3. Iteration `15`: `38.3%`
-4. Iteration `20`: `40.8%`
+```powershell
+python cli\check_rule_consistency.py --states 100 --move-checks 3 --seed 20260413
+```
 
-Head-to-head against the current best model:
+This script compares the optimized engine against a more conservative reference implementation on random states and sampled moves.
 
-1. Iteration `10`: `50.0%`
-2. Iteration `15`: `47.5%`
-3. Iteration `20`: `45.0%`
+## Current Recommended Training Baseline
 
-### M5 MPS Training (2026-04-12)
+Recommended training baseline:
 
-Directory:
-`checkpoints_m5_mps`
+1. `piece_distribution = bag7`
+2. `terminal_mode = pieces_only`
+3. `allow_voluntary_skip = false`
+4. `end_condition_mode = double_forced_pass`
+5. `no_legal_move_mode = reroll_once_then_pass`
+6. `resolution_mode = capture_then_clear_once`
+7. `board_size = 10`
 
-This run used the same mainline rules and training budget as the 4070Ti S
-run, but with MPS-optimized parameters and float16 autocast enabled.
+Recommended 4070 Ti SUPER training profile under the current Go-style mainline:
 
-Configuration:
+1. `games-per-iter = 36`
+2. `num-simulations = 24`
+3. `selfplay-parallel-games = 10`
+4. `inference-batch-size = 40`
+5. `batch-size = 512`
+6. `lr = 0.0015`
+7. `lr-step-size = 15`
+8. `lr-gamma = 0.9`
+9. `train-steps-per-iter = 24`
 
-1. `4` self-play games per batch (MPS-optimal)
-2. `48` inference batch size
-3. `24` MCTS simulations
-4. `20` iterations
-5. `120` heuristic eval games every `5` iterations
-6. `40` head-to-head games against best model every eval cycle
+Chinese summary:
+This profile uses more fresh self-play data per iteration and a fixed moderate
+amount of training updates, which currently looks better than the older
+`24 games + auto/min_train_batches` setup.
 
-Best heuristic eval result:
+## Training Parameter Retuning Under Go-Style Mainline
 
-1. Iteration `10`
-2. Winrate `45.0%`
-3. Record `54-57-9`
+Three short directional experiments were run under the fixed mainline rules:
 
-Evaluation history:
+1. `checkpoints_tune_go_baseline_short`
+   Chinese: current baseline short run
+2. `checkpoints_tune_go_more_updates`
+   Chinese: same self-play data, but more optimizer updates per iteration
+3. `checkpoints_tune_go_more_data`
+   Chinese: more self-play games per iteration, plus a moderate fixed number of updates
 
-1. Iteration `5`: `30.0%` (36-79-5)
-2. Iteration `10`: `45.0%` (54-57-9) **best**
-3. Iteration `15`: `45.0%` (54-62-4)
-4. Iteration `20`: `38.3%` (46-63-11)
+Short-run result summary:
 
-Head-to-head against the current best model:
-
-1. Iteration `10`: `47.5%` (19-15-6)
-2. Iteration `15`: `47.5%` (19-17-4)
-3. Iteration `20`: `47.5%` (19-16-5)
-
-Total training time: `30.1 minutes` (20 iterations).
-
-### Cross-Device Training Comparison
-
-| Metric | RTX 4070 Ti S | Apple M5 MPS |
-|--------|---------------|--------------|
-| Best eval winrate | 40.8% (iter 20) | **45.0%** (iter 10) |
-| Iter 5 winrate | 36.7% | 30.0% |
-| Iter 10 winrate | 38.3% | **45.0%** |
-| Iter 15 winrate | 38.3% | **45.0%** |
-| Iter 20 winrate | **40.8%** | 38.3% |
-| Training time | ~37 min (est.) | **30.1 min** |
+1. Baseline short
+   - config: `24 games/iter`, `24 sims`, `min_train_batches=16`, `lr=0.002`
+   - best eval winrate: `32.5%`
+2. More updates
+   - config: `24 games/iter`, `24 sims`, `train_steps_per_iter=32`, `lr=0.0015`
+   - best eval winrate: `35.0%`
+3. More data
+   - config: `36 games/iter`, `24 sims`, `train_steps_per_iter=24`, `lr=0.0015`
+   - best eval winrate: `37.5%`
 
 Interpretation:
 
-1. M5 MPS reaches peak performance earlier (iter 10 vs iter 20).
-2. Both platforms show late-iteration regression, suggesting overfitting
-   with the current buffer size and training budget.
-3. The mainline is improving against the heuristic benchmark.
-4. Best-checkpoint selection is still noisy enough that head-to-head should remain part of evaluation.
-5. Further progress is now more likely to come from AI/training optimization than from more rule changes.
+1. The current Go-style mainline was not fully saturated yet.
+2. There is real optimization space on the training side without changing rules.
+3. Adding more fresh self-play data each iteration currently helps more than only increasing training steps.
+4. A slightly lower learning rate also appears to reduce instability compared with the old `0.002` baseline.
 
-## GPU Benchmark Status
+Additional cross-check:
 
-### RTX 4070 Ti SUPER (Windows, CUDA)
+1. `checkpoints_tune_go_more_data/best.pt` vs `checkpoints_mainline_c_v2/best.pt`
+   - as first player set: `42.5%` winrate with `17` draws in `80` games
+2. reverse seat order:
+   - current mainline best achieved `33.8%` winrate in `80` games
 
-Benchmark file:
-`cli/benchmark_mainline_c_v2.json`
+This head-to-head does not fully eliminate variance, but it supports promoting
+the `more_data` profile as the new training default candidate.
 
-Best throughput candidates:
+## Long Training Result With Updated Mainline Profile
 
-1. `parallel=10`, `infer_batch=40`, `train_batch=512` -> `12.23 pos/s`
-2. `parallel=12`, `infer_batch=24`, `train_batch=384` -> `12.18 pos/s`
-3. `parallel=10`, `infer_batch=40`, `train_batch=384` -> `11.98 pos/s`
+A longer run was completed with the updated 4070 Ti SUPER profile in:
 
-Recommended training configuration:
+`checkpoints_mainline_c_v2`
 
-1. `selfplay_parallel_games = 10`
-2. `inference_batch_size = 40`
-3. `batch_size = 512`
+Evaluation checkpoints:
 
-### Apple M5 MacBook Air (macOS, MPS)
+1. Iteration `5`: `35.0%` heuristic winrate (`42-74-4`)
+2. Iteration `10`: `41.7%` heuristic winrate (`50-61-9`)
+3. Iteration `15`: `41.7%` heuristic winrate (`50-62-8`)
+4. Iteration `20`: `43.3%` heuristic winrate (`52-62-6`)
 
-Benchmark file:
-`cli/benchmark_m5_mps.json`
+Current takeaway:
 
-Hardware: Apple M5 (10-core, 4P+6E), 32GB unified memory.
+1. The updated training profile materially improved the Go-style mainline.
+2. The current Go-style long run now clearly exceeds the previous Go-style run that peaked around `34.2%`.
+3. The model was still improving at iteration `20`, so this line does not look saturated yet.
 
-MPS optimizations applied in this round:
+## Resume Semantics And Checkpoint Fix
 
-1. Enabled `float16` autocast on MPS (previously CUDA-only)
-2. Disabled `GradScaler` on MPS (not needed, no underflow risk with unified memory)
-3. Tuned parallel/batch parameters for MPS unified memory architecture
+Training checkpoint handling was updated in `cli/train_alphazero.py`:
 
-Best throughput candidates:
+1. checkpoints now save `scheduler` state
+2. checkpoints now save `best_model_state`
+3. `resume` now restores scheduler state when available
+4. `resume` now prints a warning that replay buffer is not restored
 
-1. `parallel=4`, `infer_batch=48`, `train_batch=512` -> `21.23 pos/s`
-2. `parallel=4`, `infer_batch=32`, `train_batch=256` -> `21.15 pos/s`
-3. `parallel=12`, `infer_batch=32`, `train_batch=256` -> `21.00 pos/s`
+Interpretation:
 
-Recommended training configuration:
+1. old `resume` runs were warm-start continuations, not strict seamless continuations
+2. so earlier `20 -> 40` resume-based degradation should not be over-interpreted as pure model regression
 
-1. `selfplay_parallel_games = 4`
-2. `inference_batch_size = 48`
-3. `batch_size = 512`
+## Fresh 40-Iteration Continuous Run
 
-### Cross-Device Comparison
+A fully fresh `40`-iteration run was also completed without `resume`:
 
-| Metric | RTX 4070 Ti S | Apple M5 MPS | Difference |
-|--------|---------------|--------------|------------|
-| Best throughput | 12.23 pos/s | 21.23 pos/s | **+73.5%** |
-| Optimal parallel | 10 | 4 | MPS prefers small parallel |
-| Optimal infer batch | 40 | 48 | Similar |
-| AMP | float16 + GradScaler | float16 (no scaler) | — |
-| Peak VRAM | 422 MB | N/A (unified) | — |
+`checkpoints_mainline_c_v3_fresh40`
 
-Key insight: MPS unified memory avoids CPU↔GPU data transfers, allowing
-higher throughput despite lower raw compute. MPS also prefers fewer
-parallel games with larger inference batches.
+Evaluation checkpoints:
 
-## Comprehensive Rule Testing (2026-04-12, M5 MPS)
+1. Iteration `20`: `40.0%`
+2. Iteration `30`: `41.7%`
+3. Iteration `40`: `32.5%`
 
-### D Variant: Missing A/B/C/D Combo Test
+Interpretation:
 
-Tested: `single_forced_pass + reroll_once_then_pass` (the missing 4th combo).
+1. under a continuous run, performance can still improve after `20`
+2. but longer training does not reliably keep improving all the way through `40`
+3. the current bottleneck looks more like mid/late training stability than raw training length
 
-Directory: `checkpoints_D_single_reroll`
+## Mid-Late Training Stability Tuning
 
-| Variant | end_condition | no_legal_move | Best Winrate |
-|---------|---------------|---------------|--------------|
-| A_baseline | double_forced_pass | pass_and_redraw | 31.7% |
-| B_strict_end | single_forced_pass | pass_and_redraw | 33.3% |
-| **C_reroll_buffer** | **double_forced_pass** | **reroll_once_then_pass** | **45.0%** |
-| D_single_reroll | single_forced_pass | reroll_once_then_pass | 40.8% |
+Three controlled `30`-iteration training-strategy tests were run:
 
-D variant eval history:
+1. `checkpoints_tune_mid_baseline30`
+   - config: `lr-step-size=10`, `lr-gamma=0.8`, `buffer-size=100000`
+   - best eval winrate: `38.8%`
+2. `checkpoints_tune_mid_slowdecay30`
+   - config: `lr-step-size=15`, `lr-gamma=0.9`, `buffer-size=100000`
+   - best eval winrate: `41.2%`
+3. `checkpoints_tune_mid_smallbuffer30`
+   - config: `lr-step-size=10`, `lr-gamma=0.8`, `buffer-size=30000`
+   - best eval winrate: `36.2%`
 
-1. Iteration `5`: `31.7%`
-2. Iteration `10`: `40.8%` **best**
-3. Iteration `15`: `35.0%`
-4. Iteration `20`: `32.5%`
+Conclusion:
 
-Conclusion: `reroll_once_then_pass` is the main driver of improvement
-(D=40.8% >> B=33.3%), but `double_forced_pass` provides additional
-benefit (C=45.0% > D=40.8%). Both parameters contribute independently.
-The C combo (current mainline) is confirmed optimal.
+1. a slower and smoother learning-rate decay helps current Go-style training more than shrinking the replay buffer
+2. smaller replay buffer is not the current main optimization direction
+3. the current recommended training default should move to the slower decay profile
 
-### Single-Parameter Ablation (Heuristic, 500 games each)
+## Cross-Check Against The Older Representative Model
 
-Each row changes exactly one parameter from the mainline baseline.
+To avoid over-reading heuristic-only gains, the new Go-style best model was also
+compared against the preserved older representative checkpoint:
 
-| Variant | P1 Win | Cap Rate | Cap Win | DZ Fill | Moves | Lead Chg | Lines | Fill |
-|---------|--------|----------|---------|---------|-------|----------|-------|------|
-| **主线基准 (10x10)** | **50.8%** | **99.8%** | **64.3%** | **36.6%** | **80.4** | **8.9** | **22.9** | **74.3%** |
-| end: single_forced_pass | 53.8% | 97.2% | 67.6% | 37.3% | 41.3 | 4.0 | 8.4 | 70.0% |
-| no_legal: pass_and_redraw | 53.4% | 98.0% | 71.8% | 38.1% | 45.7 | 4.3 | 10.0 | 70.7% |
-| resolution: clear_then_capture | 50.0% | 99.4% | 63.7% | 39.7% | 80.0 | 9.2 | 23.1 | 74.1% |
-| activation: next_turn | 51.0% | 99.8% | 61.4% | 36.6% | 80.6 | 9.0 | 23.0 | 74.4% |
-| piece_dist: bag7_independent | 48.2% | 99.6% | 60.8% | 37.9% | 75.7 | 8.4 | 21.2 | 73.7% |
-| dead_zone_fills_line=False | 56.2% | 99.8% | 78.5% | 60.2% | 42.0 | 3.2 | 7.2 | 74.6% |
-| rerolls: 2 | 44.2% | 100.0% | 57.9% | 35.3% | 100.5 | 12.0 | 30.6 | 75.7% |
-
-Key findings:
-
-1. **High-impact parameters** (large delta from baseline):
-   - `dead_zone_fills_line`: Toggling to False causes P1 winrate +5.4%,
-     captures become 78.5% decisive, lead changes drop from 8.9 to 3.2.
-     **Most important rule parameter by far.**
-   - `end_condition_mode`: single_forced_pass halves game length (41 vs 80),
-     halves lead changes (4.0 vs 8.9), and reduces line clears sharply.
-   - `no_legal_move_mode`: pass_and_redraw similarly shortens games and
-     reduces dynamism. Reroll is clearly superior.
-   - `rerolls: 2`: Extends games to 100+ moves, excessive.
-
-2. **Low-impact parameters** (near-identical to baseline):
-   - `resolution_mode`: clear_then_capture vs recheck — nearly identical
-     on all metrics. DZ fill rate slightly higher (39.7% vs 36.6%).
-   - `dead_zone_activation_mode`: immediate vs next_turn — negligible
-     difference across all metrics.
-   - `piece_distribution`: bag7 vs independent — small differences.
-     Independent bags slightly lower game length and lead changes.
-
-### Cross-Test: resolution_mode × dead_zone_activation_mode
-
-6 combinations tested (heuristic, 500 games each).
-
-| resolution_mode | activation | P1 Win | Moves | Lead Chg | Lines |
-|-----------------|------------|--------|-------|----------|-------|
-| capture_then_clear_recheck | immediate | 50.8% | 80.4 | 8.9 | 22.9 |
-| capture_then_clear_recheck | next_turn | 51.0% | 80.6 | 9.0 | 23.0 |
-| clear_then_capture | immediate | 50.0% | 80.0 | 9.2 | 23.1 |
-| clear_then_capture | next_turn | 50.8% | 79.9 | 9.2 | 23.0 |
-| capture_then_clear_once | immediate | 50.8% | 80.4 | 8.9 | 22.9 |
-| capture_then_clear_once | next_turn | 51.0% | 80.6 | 9.0 | 23.0 |
-
-Conclusion: **No meaningful interaction.** All 6 combinations produce
-nearly identical results. These two parameters do not interact at the
-heuristic AI level. Both can be considered stable at their current values.
-
-Note: `capture_then_clear_recheck` and `capture_then_clear_once` are
-identical in heuristic play (the recheck rarely triggers a second capture).
-The difference only emerges under stronger AI or specific board states.
-
-### Cross-Test: piece_distribution × dead_zone_fills_line
-
-4 combinations tested (heuristic, 500 games each).
-
-| piece_dist | dzfl | P1 Win | Cap Win | DZ Fill | Moves | Lead Chg | Lines |
-|------------|------|--------|---------|---------|-------|----------|-------|
-| **bag7** | **True** | **50.8%** | **64.3%** | **36.6%** | **80.4** | **8.9** | **22.9** |
-| bag7 | False | 56.2% | 78.5% | 60.2% | 42.0 | 3.2 | 7.2 |
-| bag7_independent | True | 48.2% | 60.8% | 37.9% | 75.7 | 8.4 | 21.2 |
-| bag7_independent | False | 57.0% | 77.1% | 61.6% | 41.7 | 2.9 | 7.0 |
-
-Conclusion: `dead_zone_fills_line` dominates this interaction.
-Regardless of piece distribution, setting dzfl=False always causes:
-shorter games, fewer lead changes, higher capture decisiveness.
-`piece_distribution` has only minor additive effects. **No surprising
-interaction** — these parameters are independent in effect.
-
-### 8×8 Board Generalization
-
-| Board | P1 Win | Cap Rate | Cap Win | DZ Fill | Moves | Lead Chg | Lines | Fill |
-|-------|--------|----------|---------|---------|-------|----------|-------|------|
-| 10×10 | 50.8% | 99.8% | 64.3% | 36.6% | 80.4 | 8.9 | 22.9 | 74.3% |
-| 8×8 | 47.4% | 95.8% | 60.7% | 27.3% | 53.0 | 7.4 | 19.9 | 71.0% |
-
-On 8×8 the rules still produce healthy metrics but with notable shifts:
-
-1. Capture rate drops from 99.8% to 95.8% (less room for surrounding).
-2. Dead zone fill rate drops from 36.6% to 27.3% (less room to convert).
-3. Games are shorter (53 vs 80 moves) — expected for a smaller board.
-4. Lead changes slightly fewer (7.4 vs 8.9) but still healthy.
-5. P1 winrate is 47.4% — slightly favoring P2 (reverse of 10×10).
-
-Conclusion: The mainline rules generalize to 8×8 without breaking.
-The core dynamics (capture, line clear, dead zone conversion) all function.
-Minor rebalancing may be needed if 8×8 becomes a supported mode.
-
-## Rule Testing Summary
-
-### Parameter Importance Ranking (from ablation)
-
-1. **dead_zone_fills_line** — Critical. True is correct; False breaks balance.
-2. **end_condition_mode** — High. double_forced_pass is correct.
-3. **no_legal_move_mode** — High. reroll_once_then_pass is correct.
-4. **no_legal_move_rerolls** — Medium. 1 is correct; 2 causes bloat.
-5. **piece_distribution** — Low. bag7 is slightly better than independent.
-6. **resolution_mode** — Very low. All 3 modes nearly identical.
-7. **dead_zone_activation_mode** — Very low. No measurable impact.
-
-### Large Buffer + 400 Eval Training Test
-
-Directory: `checkpoints_mainline_large_buffer`
-
-Configuration changes from standard mainline:
-
-1. `buffer_size`: 100,000 → 200,000
-2. `games_per_iter`: 24 → 32
-3. `eval_games`: 120 → 400
-
-Evaluation history:
-
-| Iter | Winrate | Record | 95% CI | h2h vs Best |
-|------|---------|--------|--------|-------------|
-| 5 | **40.0%** | 160-217-23 | ±4.8% | N/A |
-| 10 | 37.0% | 148-229-23 | ±4.7% | 40.0% |
-| 15 | 37.8% | 151-224-25 | ±4.7% | 50.0% |
-| 20 | 38.2% | 153-216-31 | ±4.8% | 42.5% |
-
-Comparison with standard buffer (120 eval games):
-
-| Config | Best Winrate | Peak Iter | Iter 20 | Regression |
-|--------|-------------|-----------|---------|------------|
-| buffer=100k, eval=120 | 45.0% | 10 | 38.3% | -6.7% |
-| buffer=200k, eval=400 | 40.0% | 5 | 38.2% | -1.8% |
-
-Findings:
-
-1. **Larger buffer reduces regression**: Iter 20 drops only 1.8% from peak
-   (vs 6.7% with smaller buffer). The model is more stable.
-2. **Lower peak, but more reliable**: With 400 eval games the variance
-   is lower, so the 40.0% peak is a more trustworthy number than the
-   45.0% measured with only 120 games.
-3. **Iter 20 performance is nearly identical** (38.2% vs 38.3%),
-   suggesting the real capability of a 20-iteration model is ~38%.
-4. The earlier "45.0% peak" was likely inflated by small-sample noise.
-
-Recommendation: Use buffer_size=200k and eval_games=400 as the new
-standard training configuration for future tests.
-
-### Remaining Known Issues
-
-1. **SimpleAI evaluation bias**: Captures weighted 15-20x vs line clears
-   at 3x. Low-impact parameters (resolution_mode, activation_mode) may
-   show differences under stronger AI that the heuristic cannot detect.
-
-Note: `score_dead_zone_weight` was intentionally dropped by design
-decision, not a testing gap. The game design avoids numeric weight
-tuning in favor of clean, intuitive rules.
-
-## Files to Use on Another Device
-
-The most important files to carry forward are:
-
-1. `cli/tetris_weiqi.py`
-2. `cli/analyze_rules.py`
-3. `cli/train_alphazero.py`
-4. `run_train_4070tis.ps1`
-5. `run_rule_matrix_4070tis.ps1`
-6. `TESTING_STATUS.md`
-
-If you want the latest trained model as well, also copy:
-
-1. `checkpoints_mainline_c_v2/best.pt`
-2. `checkpoints_mainline_c_v2/eval_history.jsonl`
+1. New Go-style best vs old representative
+   - `46-57-17` in `120` games
+   - winrate: `38.3%`
+2. Old representative vs new Go-style best
+   - `62-41-17` in `120` games
+   - winrate: `51.7%`
+3. New Go-style best vs heuristic Lv2
+   - `42-69-9`
+   - winrate: `35.0%`
+4. Old representative vs heuristic Lv2
+   - `47-69-4`
+   - winrate: `39.2%`
+
+Interpretation:
+
+1. The new training profile improved the Go-style mainline itself.
+2. But the current Go-style best still does not consistently beat the preserved older representative model.
+3. So the mainline training setup should be considered improved, while overall model replacement is not yet fully justified.
+
+## Next Suggested Step
+
+The next useful step is a longer training run under the updated slower-decay
+profile, followed by evaluation against the same fixed heuristic and head-to-head setup.

@@ -1,179 +1,314 @@
 # 俄罗斯方块棋 - 开发进度
 
-最后更新: 2026-04-13
+最后更新: 2026-04-14
+
+---
+
+## 当前主线状态
+
+当前主线已经从“死区/封锁格”玩法切换为 Go-style 规则版本。
+
+当前推荐主线:
+
+1. 棋盘大小: `10x10`
+2. 发牌方式: `bag7`
+   中文: 共享七袋发牌
+3. 终局判定: `pieces_only`
+   中文: 仅比较终局存活棋子数
+4. 主动跳过: `false`
+   中文: 禁止主动跳过
+5. 终局触发: `double_forced_pass`
+   中文: 连续两次被动无着结束
+6. 无合法着法处理: `reroll_once_then_pass`
+   中文: 无合法着法时先重抽一次，再被动停手
+7. 结算顺序: `capture_then_clear_once`
+   中文: 先提子，再消行，不做第二次提子复查
+
+死区主线思路已封存，作为未来扩展玩法候选，不再作为当前训练与规则优化的主线依据。
 
 ---
 
 ## 已完成的工作
 
-### Phase 1: 核心玩法 (已完成)
+### Phase 1: 核心玩法
 
 - [x] 10x10 棋盘基础对弈系统
 - [x] 7种标准俄罗斯方块 + 旋转/放置
-- [x] 围棋围杀机制 (四方向气判定)
+- [x] 围棋式围杀机制
 - [x] 俄罗斯方块消行机制
-- [x] 死区系统 (被围杀的方块转为死区)
-- [x] 3级启发式AI (简单/中等/困难)
-- [x] 移动端触控适配
-- [x] 多棋盘尺寸支持 (8x8, 10x10, 12x12, 15x15)
 - [x] 人机/双人模式切换
+- [x] 基础浏览器交互与棋谱导出
 
-### Phase 2: 规则体系确立 (已完成)
+### Phase 2: 当前主线规则确立
 
-通过系统性测试 (A/B/C/D对比、单参数消融、交叉实验) 确定了主线规则:
+已完成 Go-style 主线下的关键规则筛选:
 
-| 规则参数 | 确定值 | 重要度 |
-|---------|--------|--------|
-| 棋盘大小 | 10x10 | - |
-| 发牌模式 | 共享 bag7 | 低 |
-| 死区参与消行 | true | **关键** |
-| 终局计分 | pieces_only | - |
-| 主动跳过 | 禁止 | - |
-| 终局条件 | double_forced_pass | **高** |
-| 无合法着法处理 | reroll_once_then_pass | **高** |
-| 结算顺序 | capture_then_clear_recheck | 低 |
-| 死区转换时机 | immediate | 低 |
-| 重抽次数 | 1 | 中 |
+1. 无合法着法处理
+   - `reroll_once_then_pass` 优于 `pass_and_redraw`
+2. 结算顺序
+   - `capture_then_clear_once` 优于 `capture_then_clear_recheck`
+   - 也优于当前测试中的 `clear_then_capture`
+3. 发牌方式
+   - `bag7` 明显优于 `bag7_independent`
+4. 终局判定
+   - 当前继续保留 `pieces_only`
+   - 旧 `pieces_then_deadzones` / `area_like` 不再是 Go-style 主线下的有效候选
 
-详细测试数据见 `TESTING_STATUS.md`。
+详细测试记录见 `TESTING_STATUS.md`。
 
-### Phase 3: AlphaZero 训练 (基础完成)
+### Phase 3: 训练与评估管线
 
-#### 网络架构
-- AlphaZero-Lite: ResNet 6层, 128通道, 3.17M参数
-- 输入编码: 22通道 (5棋盘one-hot + 7当前方块 + 7 bag计数 + 1规则 + 2玩家指示)
-- 输出: 策略头 (400维, 4旋转×10×10) + 价值头 (标量tanh)
+- [x] AlphaZero-Lite: ResNet 6层, 128通道
+- [x] 自对弈 + MCTS + 评估 + best checkpoint 流程
+- [x] 结构化评估历史输出
+- [x] head-to-head 评估支持
+- [x] 浏览器部署所需模型导出能力
 
-#### 训练环境
-| 环境 | 设备 | 最佳吞吐量 | 最佳胜率 |
-|------|------|-----------|---------|
-| Windows | RTX 4070 Ti SUPER | 12.23 pos/s | 40.8% (iter 20) |
-| macOS | Apple M5 MPS | 21.23 pos/s (+73.5%) | 45.0% (iter 10) |
+### Phase 4: 规则引擎性能优化
 
-#### MPS 优化
-- 启用 float16 autocast (此前仅CUDA支持)
-- 禁用 GradScaler (MPS统一内存不需要)
-- 优化并行/批量参数适配统一内存架构
+已完成多轮“语义等价”的性能优化:
 
-#### 训练参数调优
-- 大缓冲区 (200k) 降低过拟合回归: 从 -6.7% 降至 -1.8%
-- 400局评估降低采样噪声, 实际模型能力约 38%
+- [x] 方块旋转与边界缓存
+- [x] 合法落点范围裁剪
+- [x] 自杀检查局部化
+- [x] 提子检查局部化
+- [x] 消行检查局部化
+- [x] 候选区域标记优化
 
-### Phase 4: 浏览器AI部署 (已完成)
+这些优化显著提升了 4070 Ti SUPER 上的自对弈吞吐。
 
-- [x] ONNX模型导出 (opset 17, 单文件 12.2MB)
-- [x] onnxruntime-web v1.21.0 集成
-- [x] 22通道状态编码 JavaScript 实现 (与Python训练端一致)
-- [x] bag7 共享发牌系统 JavaScript 实现
-- [x] 神经网络AI选项 (Level 4: 神经网络)
-- [x] Softmax采样推理 (temperature=0.5)
-- [x] nextTurn() reroll逻辑与主线规则同步
-- [x] 浏览器端实际验证通过
+### Phase 5: 一致性护栏
 
-### Phase 5: 游戏体验功能 (进行中)
+- [x] 新增 `cli/check_rule_consistency.py`
+- [x] 优化后可对随机局面和抽样合法着法做参考实现对照
+- [x] 已用 `100` 个随机局面通过一致性检查
 
-- [x] 棋谱记录系统 (全局 moveHistory 追踪)
-- [x] 结算画面导出棋谱 (.txt文件下载)
-  - 对局基本信息 (日期/棋盘/模式/AI等级)
-  - 完整落子过程 (棋子/旋转/坐标/围杀/消行)
-  - 终局棋盘ASCII图示
-- [x] 初始加载render()报错修复 (board未初始化保护)
+推荐命令:
+
+```powershell
+python cli\check_rule_consistency.py --states 100 --move-checks 3 --seed 20260413
+```
 
 ---
 
-## 当前已知问题
+## 当前已知情况
 
-### AI棋力不足
+### 1. 规则主线已切换
 
-实际对局测试表明, 当前神经网络AI的策略性明显不足:
-- 评估胜率仅约 38-45%, 无法稳定赢过随机AI
-- 缺乏中心控制、围杀规划、防守意识
-- 浏览器端推理无MCTS搜索, 纯网络直觉出招
+旧文档中大量“死区主线”结论已不再直接适用于当前主线。
 
-**根本原因: 训练量级不足**
+当前主线是:
 
-| 参数 | 当前值 | 有效训练估计 |
-|------|--------|------------|
-| 每轮自对弈局数 | 20-32 | 200-500 |
-| MCTS模拟次数 | 24-50 | 200-800 |
-| 训练迭代轮数 | 10-20 | 100-500 |
-| 总自对弈局数 | ~200-400 | 数万-数十万 |
+1. 提子后直接清空为 `EMPTY`
+2. 不再围绕死区转化展开核心循环
+3. 规则优化与训练比较应只基于 Go-style 主线重新判断
+
+### 2. 性能已经大幅改善
+
+在本地 4070 Ti SUPER 环境中，规则引擎优化后吞吐曾达到:
+
+- `23.20 pos/s`
+
+说明当前主瓶颈已经从“大范围整盘规则扫描”收缩到了更细碎的 Python 开销和环境波动问题。
+
+### 3. Benchmark 环境波动需要注意
+
+后续参数 sweep 中观察到同配置吞吐出现明显漂移，因此:
+
+1. 不应仅凭一次 benchmark 结果就更换主训练参数
+2. 更可靠的做法是:
+   - 固定 case 连续复测
+   - 保持系统环境稳定
+   - 再决定最终参数
+
+---
+
+## 当前训练基线
+
+当前推荐训练入口:
+
+`run_train_4070tis.ps1`
+
+当前脚本已经更新为 Go-style 主线规则:
+
+1. `piece_distribution = bag7`
+2. `terminal_mode = pieces_only`
+3. `allow_voluntary_skip = false`
+4. `end_condition_mode = double_forced_pass`
+5. `no_legal_move_mode = reroll_once_then_pass`
+6. `resolution_mode = capture_then_clear_once`
+
+当前推荐的 4070 Ti SUPER 训练配比进一步更新为:
+
+1. `games-per-iter = 36`
+2. `num-simulations = 24`
+3. `selfplay-parallel-games = 10`
+4. `inference-batch-size = 40`
+5. `batch-size = 512`
+6. `lr = 0.0015`
+7. `lr-step-size = 15`
+8. `lr-gamma = 0.9`
+9. `train-steps-per-iter = 24`
+
+这次调整不是规则改动，而是训练配比复调，目的是让 Go-style 主线在固定规则下更稳定地产生更强模型。
+
+### 4. Go-style 主线下仍有训练优化空间
+
+围绕固定主线规则，已完成一轮定向参数复调短测:
+
+1. 基线短测
+   - `24 games/iter`
+   - `24 sims`
+   - `min_train_batches = 16`
+   - `lr = 0.002`
+   - 最佳评估胜率: `32.5%`
+2. 强训练短测
+   - `24 games/iter`
+   - `24 sims`
+   - `train_steps_per_iter = 32`
+   - `lr = 0.0015`
+   - 最佳评估胜率: `35.0%`
+3. 强数据短测
+   - `36 games/iter`
+   - `24 sims`
+   - `train_steps_per_iter = 24`
+   - `lr = 0.0015`
+   - 最佳评估胜率: `37.5%`
+
+当前结论:
+
+1. Go-style 主线还没有练满
+2. 单纯多训有帮助，但“更多新自对弈样本 + 适度固定训练步数”更有效
+3. 学习率从 `0.002` 下调到 `0.0015` 后，短测表现更稳定
+4. 因此当前更值得推进的是训练参数复调，而不是继续新增规则复杂度
+
+附加交叉验证:
+
+1. `checkpoints_tune_go_more_data/best.pt`
+2. `checkpoints_mainline_c_v2/best.pt`
+
+在当前 Go-style 规则下做 `80` 局 head-to-head 时，前者对后者取得:
+
+- `42.5%` 胜率
+- `29` 负
+- `17` 和
+
+反向座次下，旧主配置最佳模型只有:
+
+- `33.8%` 胜率
+
+这说明新的训练配比已经表现出可见优势，尽管仍需要更长训练来进一步确认。
+
+### 5. 更新后的长训练已经验证训练配比改进有效
+
+基于更新后的主训练脚本，已完成一轮 `20` 轮长训练，关键评估结果如下:
+
+1. Iter `5`: `35.0%`
+2. Iter `10`: `41.7%`
+3. Iter `15`: `41.7%`
+4. Iter `20`: `43.3%`
+
+这说明:
+
+1. 新训练配比已经显著超过此前这条 Go-style 主线自己的长训练结果
+2. 当前提升是真实的，不只是短测噪声
+3. 在 `20` 轮时仍有上升迹象，因此还不能认为这条线已经训练饱和
+
+### 6. 但当前 Go-style 最佳模型仍未稳定超过旧代表模型
+
+固定种子复核对战结果:
+
+1. 新 Go-style 最佳模型 vs 旧代表模型
+   - `46-57-17` / `120` 局
+   - 胜率 `38.3%`
+2. 旧代表模型 vs 新 Go-style 最佳模型
+   - `62-41-17` / `120` 局
+   - 胜率 `51.7%`
+
+对同一 heuristic Lv2 的固定评估:
+
+1. 新 Go-style 最佳模型: `35.0%`
+2. 旧代表模型: `39.2%`
+
+当前更稳妥的结论是:
+
+1. Go-style 主线训练参数优化已经成功
+2. 但“新主线模型已经全面取代旧代表模型”这一点还不能下结论
+3. 下一阶段应继续在固定规则下拉长训练预算，而不是再扩展新规则复杂度
+
+### 7. 训练恢复语义已修正
+
+`cli/train_alphazero.py` 已补强 checkpoint 机制:
+
+1. 保存 `scheduler` 状态
+2. 保存 `best_model_state`
+3. `resume` 时恢复 scheduler
+4. 明确提示 replay buffer 不会恢复
+
+这意味着:
+
+1. 旧的 `resume` 续训结果属于暖启动续训
+2. 不能把此前的 `20 -> 40` 回落简单归因为模型本身后期必然退化
+
+### 8. 中后期稳定性更值得继续优化学习率调度
+
+基于固定规则，已完成一轮训练策略对比:
+
+1. 基线组
+   - `lr-step-size = 10`
+   - `lr-gamma = 0.8`
+   - `buffer-size = 100000`
+   - 最佳评估胜率: `38.8%`
+2. 慢衰减组
+   - `lr-step-size = 15`
+   - `lr-gamma = 0.9`
+   - `buffer-size = 100000`
+   - 最佳评估胜率: `41.2%`
+3. 小回放池组
+   - `lr-step-size = 10`
+   - `lr-gamma = 0.8`
+   - `buffer-size = 30000`
+   - 最佳评估胜率: `36.2%`
+
+当前结论:
+
+1. 当前主线的中后期波动更像是学习率调度问题
+2. 更慢、更平滑的学习率衰减比缩小 replay buffer 更有效
+3. 因此主训练脚本已更新为慢衰减配置
 
 ---
 
 ## 下一步计划
 
-### 近期 (P0 - 提升AI棋力)
+### P0
 
-1. **大规模训练**
-   - 目标参数: `--iterations 100 --games-per-iter 100 --num-simulations 200`
-   - 预计在M5 MPS上需要数小时到十余小时
-   - 目标: 评估胜率提升至 60%+ (稳定赢过启发式AI)
+1. 基于更新后的慢衰减训练配比继续加长训练预算
+2. 用固定评估种子继续复查新 Go-style 最佳模型与旧代表模型差异
+3. 继续留意当前 4070 Ti SUPER 环境下 benchmark 波动
 
-2. **浏览器端轻量MCTS**
-   - 在onnxruntime-web推理基础上实现Web端MCTS搜索
-   - 每步做20-50次模拟, 用WebWorker后台运行避免UI阻塞
-   - 预期可显著提升落子质量
+### P1
 
-3. **推理优化**
-   - 降低temperature (0.5→0.1) 减少随机性
-   - 考虑ONNX模型量化 (float32→float16/int8) 加速浏览器推理
-   - 添加"思考中..."状态提示
+4. 若长训练继续支持当前结论，则正式固化新的训练主配置
+5. 评估是否需要设计 Go-style 下真正有效的新终局模式候选
 
-### 中期 (P1 - 游戏体验)
+### P2
 
-4. **落子动画与音效**
-   - 方块放置动画
-   - 围杀/消行特效
-   - 基础音效系统
-
-5. **AI复盘功能**
-   - 对局结束后标注好手/疑问手
-   - 展示AI推荐的最佳着法
-
-6. **本地存档**
-   - IndexedDB/localStorage保存对局状态
-   - 悔棋功能
-
-### 远期 (P2 - RPG与联网)
-
-7. **迁移到游戏引擎 (Phaser 3)**
-   - 为RPG系统打基础
-   - 更丰富的动画和交互
-
-8. **RPG系统原型**
-   - 第一个职业实现 (先知: 预览下一个方块)
-   - 剧情战役第一章 (10关)
-
-9. **多人联网**
-   - WebSocket实时对战
-   - 排位匹配系统
+6. 将“死区主线”整理为独立扩展玩法分支
+7. 继续推进网页端 AI 与 UX 改进
 
 ---
 
-## 项目文件结构
+## 相关文件
 
 ```
 TetrisWeiqi/
-├── index.html                  # 主游戏页面 (含浏览器AI)
-├── DEV_PROGRESS.md             # 本文件 - 开发进度
-├── PROJECT_PLAN.md             # 完整项目规划
-├── TESTING_STATUS.md           # 规则测试详细记录
-├── cli/
-│   ├── tetris_weiqi.py         # 游戏核心引擎 (Python)
-│   ├── train_alphazero.py      # AlphaZero训练脚本
-│   ├── analyze_rules.py        # 规则分析工具
-│   ├── benchmark_m5_mps.json   # M5 MPS基准测试结果
-│   └── benchmark_mainline_c_v2.json  # 4070TiS基准测试结果
-├── checkpoints_m5_mps/
-│   ├── best.pt                 # 最佳模型检查点 (38MB)
-│   ├── best_browser.onnx       # 浏览器部署ONNX模型 (12.2MB)
-│   └── eval_history.jsonl      # 评估历史
-├── checkpoints_mainline_c_v2/  # RTX 4070TiS训练结果
-├── checkpoints_D_single_reroll/# D变体测试结果
-└── checkpoints_mainline_large_buffer/ # 大缓冲区测试结果
+├── index.html
+├── DEV_PROGRESS.md
+├── TESTING_STATUS.md
+├── run_train_4070tis.ps1
+└── cli/
+    ├── tetris_weiqi.py
+    ├── train_alphazero.py
+    ├── analyze_rules.py
+    └── check_rule_consistency.py
 ```
-
----
-
-*文档版本: v1.0 | 创建日期: 2026-04-13*
