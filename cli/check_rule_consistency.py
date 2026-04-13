@@ -31,21 +31,15 @@ class ReferenceTetrisWeiqi(TetrisWeiqi):
         if not self.can_place(cells, row, col, player):
             return False
         snapshot = [r[:] for r in self.board]
-        converted_cells = set()
         for dr, dc in cells:
             rr, cc = row + dr, col + dc
-            if self.board[rr][cc] in (DEAD1, DEAD2):
-                converted_cells.add((rr, cc))
             self.board[rr][cc] = player
         self._resolve_placement_effects(
             player,
             allow_self_capture=False,
             placed_positions=None,
-            converted_cells=converted_cells,
-            previous_board=snapshot,
         )
-        inactive = converted_cells if self.dead_zone_activation_mode == 'next_turn' else None
-        self_dead = self._has_dead_groups(player, inactive, snapshot)
+        self_dead = self._has_dead_groups(player)
         self.board = snapshot
         return not self_dead
 
@@ -53,7 +47,6 @@ class ReferenceTetrisWeiqi(TetrisWeiqi):
                            candidates=None,
                            inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
                            previous_board: Optional[List[List[int]]] = None) -> int:
-        dead_mark = DEAD1 if target == P1 else DEAD2
         size = self.size
         board = self.board
         has_inactive = inactive_conversions is not None and previous_board is not None
@@ -68,7 +61,7 @@ class ReferenceTetrisWeiqi(TetrisWeiqi):
                 g = self._get_group(r, c, visited, inactive_conversions, previous_board)
                 if g and not g['has_liberty']:
                     for gr, gc in g['group']:
-                        board[gr][gc] = dead_mark
+                        board[gr][gc] = EMPTY
                     total += len(g['group'])
         return total
 
@@ -111,28 +104,23 @@ class ReferenceTetrisWeiqi(TetrisWeiqi):
         opponent = P2 if player == P1 else P1
         captured = 0
         lines_cleared = 0
-        inactive = None
-        prior = None
-        if self.dead_zone_activation_mode == 'next_turn' and converted_cells and previous_board is not None:
-            inactive = converted_cells
-            prior = previous_board
 
         if self.resolution_mode == 'clear_then_capture':
-            lines_cleared = self._check_line_clears(None, inactive, prior)
-            captured += self._capture_groups_of(opponent, None, inactive, prior)
+            lines_cleared = self._check_line_clears(None)
+            captured += self._capture_groups_of(opponent, None)
             if allow_self_capture:
-                self._capture_groups_of(player, None, inactive, prior)
+                self._capture_groups_of(player, None)
             return {'captured': captured, 'lines_cleared': lines_cleared}
 
-        captured += self._capture_groups_of(opponent, None, inactive, prior)
+        captured += self._capture_groups_of(opponent, None)
         if allow_self_capture:
-            self._capture_groups_of(player, None, inactive, prior)
-        lines_cleared = self._check_line_clears(None, inactive, prior)
+            self._capture_groups_of(player, None)
+        lines_cleared = self._check_line_clears(None)
 
         if self.resolution_mode == 'capture_then_clear_recheck' and lines_cleared > 0:
-            captured += self._capture_groups_of(opponent, None, inactive, prior)
+            captured += self._capture_groups_of(opponent, None)
             if allow_self_capture:
-                self._capture_groups_of(player, None, inactive, prior)
+                self._capture_groups_of(player, None)
 
         return {'captured': captured, 'lines_cleared': lines_cleared}
 

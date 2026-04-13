@@ -183,7 +183,8 @@ class TetrisWeiqi:
                  no_legal_move_mode: str = 'reroll_once_then_pass',
                  resolution_mode: str = 'capture_then_clear_recheck',
                  dead_zone_activation_mode: str = 'immediate',
-                 no_legal_move_rerolls: int = 1):
+                 no_legal_move_rerolls: int = 1,
+                 local_search: bool = True):
         self.size = size
         self.dead_zone_fills_line = dead_zone_fills_line  # 死区是否参与消行判定
         self.score_dead_zone_weight = score_dead_zone_weight
@@ -195,6 +196,7 @@ class TetrisWeiqi:
         self.resolution_mode = resolution_mode
         self.dead_zone_activation_mode = dead_zone_activation_mode
         self.no_legal_move_rerolls = no_legal_move_rerolls
+        self.local_search = local_search
         self.rng = random.Random(seed)
         self._piece_bag = []
         self._player_piece_bags = {P1: [], P2: []}
@@ -243,14 +245,7 @@ class TetrisWeiqi:
     # --- Placement Validation ---
 
     def _cell_allowed(self, r: int, c: int, player: int) -> bool:
-        cell = self.board[r][c]
-        if cell == EMPTY:
-            return True
-        if player == P1 and cell == DEAD2:
-            return True
-        if player == P2 and cell == DEAD1:
-            return True
-        return False
+        return self.board[r][c] == EMPTY
 
     def can_place(self, cells, row: int, col: int, player: int) -> bool:
         size = self.size
@@ -259,14 +254,8 @@ class TetrisWeiqi:
             r, c = row + dr, col + dc
             if r < 0 or r >= size or c < 0 or c >= size:
                 return False
-            cell = board[r][c]
-            if cell == EMPTY:
-                continue
-            if player == P1 and cell == DEAD2:
-                continue
-            if player == P2 and cell == DEAD1:
-                continue
-            return False
+            if board[r][c] != EMPTY:
+                return False
         return True
 
     def is_legal_move(self, cells, row: int, col: int, player: int) -> bool:
@@ -274,23 +263,21 @@ class TetrisWeiqi:
             return False
         # 模拟完整结算顺序，再检查己方是否仍为自杀
         snapshot = [r[:] for r in self.board]
-        placed_positions = []
-        converted_cells = set()
+        placed_positions = [] if self.local_search else None
         for dr, dc in cells:
             rr, cc = row + dr, col + dc
-            placed_positions.append((rr, cc))
-            if self.board[rr][cc] in (DEAD1, DEAD2):
-                converted_cells.add((rr, cc))
+            if placed_positions is not None:
+                placed_positions.append((rr, cc))
             self.board[rr][cc] = player
         self._resolve_placement_effects(
             player,
             allow_self_capture=False,
             placed_positions=placed_positions,
-            converted_cells=converted_cells,
-            previous_board=snapshot
         )
-        inactive = converted_cells if self.dead_zone_activation_mode == 'next_turn' else None
-        self_dead = self._has_dead_group_from_cells(player, placed_positions, inactive, snapshot)
+        if placed_positions is not None:
+            self_dead = self._has_dead_group_from_cells(player, placed_positions)
+        else:
+            self_dead = self._has_dead_groups(player)
         self.board = snapshot
         return not self_dead
 
@@ -369,7 +356,6 @@ class TetrisWeiqi:
                            candidates=None,
                            inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
                            previous_board: Optional[List[List[int]]] = None) -> int:
-        dead_mark = DEAD1 if target == P1 else DEAD2
         size = self.size
         board = self.board
         has_inactive = inactive_conversions is not None and previous_board is not None
@@ -385,7 +371,7 @@ class TetrisWeiqi:
                     g = self._get_group(r, c, visited, inactive_conversions, previous_board)
                     if g and not g['has_liberty']:
                         for gr, gc in g['group']:
-                            board[gr][gc] = dead_mark
+                            board[gr][gc] = EMPTY
                         total += len(g['group'])
         else:
             candidate_marks = bytearray(size * size)
@@ -407,7 +393,7 @@ class TetrisWeiqi:
                 g = self._get_group(r, c, visited, inactive_conversions, previous_board)
                 if g and not g['has_liberty']:
                     for gr, gc in g['group']:
-                        board[gr][gc] = dead_mark
+                        board[gr][gc] = EMPTY
                     total += len(g['group'])
         return total
 
@@ -453,12 +439,7 @@ class TetrisWeiqi:
 
     def _cell_fills_line(self, cell: int) -> bool:
         """判断一个格子是否算作"填满"用于消行判定"""
-        if cell == EMPTY:
-            return False
-        if cell in (P1, P2):
-            return True
-        # 死区 (DEAD1, DEAD2): 取决于规则配置
-        return self.dead_zone_fills_line
+        return cell != EMPTY
 
     def _check_line_clears(self,
                            candidates=None,
@@ -548,47 +529,37 @@ class TetrisWeiqi:
         opponent = P2 if player == P1 else P1
         captured = 0
         lines_cleared = 0
-        inactive = None
-        prior = None
-        if self.dead_zone_activation_mode == 'next_turn' and converted_cells and previous_board is not None:
-            inactive = converted_cells
-            prior = previous_board
 
         if self.resolution_mode == 'clear_then_capture':
-            lines_cleared = self._check_line_clears(placed_positions, inactive, prior)
-            captured += self._capture_groups_of(opponent, placed_positions, inactive, prior)
+            lines_cleared = self._check_line_clears(placed_positions)
+            captured += self._capture_groups_of(opponent, placed_positions)
             if allow_self_capture:
-                self._capture_groups_of(player, placed_positions, inactive, prior)
+                self._capture_groups_of(player, placed_positions)
             return {'captured': captured, 'lines_cleared': lines_cleared}
 
-        captured += self._capture_groups_of(opponent, placed_positions, inactive, prior)
+        captured += self._capture_groups_of(opponent, placed_positions)
         if allow_self_capture:
-            self._capture_groups_of(player, placed_positions, inactive, prior)
-        lines_cleared = self._check_line_clears(placed_positions, inactive, prior)
+            self._capture_groups_of(player, placed_positions)
+        lines_cleared = self._check_line_clears(placed_positions)
 
         if self.resolution_mode == 'capture_then_clear_recheck' and lines_cleared > 0:
-            captured += self._capture_groups_of(opponent, None, inactive, prior)
+            captured += self._capture_groups_of(opponent, None)
             if allow_self_capture:
-                self._capture_groups_of(player, None, inactive, prior)
+                self._capture_groups_of(player, None)
 
         return {'captured': captured, 'lines_cleared': lines_cleared}
 
     def place_piece(self, cells, row: int, col: int, player: int) -> Dict:
-        snapshot = [r[:] for r in self.board]
-        placed_positions = []
-        converted_cells = set()
+        placed_positions = [] if self.local_search else None
         for dr, dc in cells:
             rr, cc = row + dr, col + dc
-            placed_positions.append((rr, cc))
-            if self.board[rr][cc] in (DEAD1, DEAD2):
-                converted_cells.add((rr, cc))
+            if placed_positions is not None:
+                placed_positions.append((rr, cc))
             self.board[rr][cc] = player
         return self._resolve_placement_effects(
             player,
             allow_self_capture=True,
             placed_positions=placed_positions,
-            converted_cells=converted_cells,
-            previous_board=snapshot
         )
 
     def do_move(self, rot: int, row: int, col: int) -> Dict:

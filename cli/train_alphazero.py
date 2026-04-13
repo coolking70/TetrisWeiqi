@@ -380,7 +380,8 @@ class MCTS:
             no_legal_move_mode=game.no_legal_move_mode,
             resolution_mode=game.resolution_mode,
             dead_zone_activation_mode=game.dead_zone_activation_mode,
-            no_legal_move_rerolls=game.no_legal_move_rerolls
+            no_legal_move_rerolls=game.no_legal_move_rerolls,
+            local_search=game.local_search
         )
         sim_game.board = [r[:] for r in game.board]
         sim_game.current_player = game.current_player
@@ -604,7 +605,8 @@ def self_play_game(model: PolicyValueNet, num_simulations=50, temperature=1.0,
         no_legal_move_mode=no_legal_move_mode,
         resolution_mode=resolution_mode,
         dead_zone_activation_mode=dead_zone_activation_mode,
-        no_legal_move_rerolls=no_legal_move_rerolls
+        no_legal_move_rerolls=no_legal_move_rerolls,
+        local_search=True
     )
     mcts = MCTS(
         model, num_simulations=num_simulations, device=device, use_amp=use_amp,
@@ -680,7 +682,8 @@ def self_play_games_parallel(model: PolicyValueNet, num_games=1, num_simulations
             no_legal_move_mode=no_legal_move_mode,
             resolution_mode=resolution_mode,
             dead_zone_activation_mode=dead_zone_activation_mode,
-            no_legal_move_rerolls=no_legal_move_rerolls
+            no_legal_move_rerolls=no_legal_move_rerolls,
+            local_search=True
         )
         for _ in range(num_games)
     ]
@@ -845,7 +848,8 @@ def evaluate_vs_heuristic(model: PolicyValueNet, num_games=20,
                 no_legal_move_mode=no_legal_move_mode,
                 resolution_mode=resolution_mode,
                 dead_zone_activation_mode=dead_zone_activation_mode,
-                no_legal_move_rerolls=no_legal_move_rerolls
+                no_legal_move_rerolls=no_legal_move_rerolls,
+                local_search=True
             ),
             'heuristic': SimpleAI(ai_level),
             'model_player': P1 if i % 2 == 0 else P2,
@@ -969,7 +973,8 @@ def evaluate_model_vs_model(model_a: PolicyValueNet, model_b: PolicyValueNet, nu
                 no_legal_move_mode=no_legal_move_mode,
                 resolution_mode=resolution_mode,
                 dead_zone_activation_mode=dead_zone_activation_mode,
-                no_legal_move_rerolls=no_legal_move_rerolls
+                no_legal_move_rerolls=no_legal_move_rerolls,
+                local_search=True
             ),
             'a_player': P1 if i % 2 == 0 else P2,
         })
