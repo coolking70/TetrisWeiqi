@@ -53,6 +53,47 @@ CELL_CHARS = {
     DEAD2: '%',  # 封锁P2
 }
 
+NEIGHBORS = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+
+def _rotate_cells(cells: List[Tuple[int, int]], rot: int) -> List[Tuple[int, int]]:
+    c = list(cells)
+    for _ in range(rot % 4):
+        c = [(col, -row) for row, col in c]
+    min_r = min(r for r, _ in c)
+    min_c = min(c_ for _, c_ in c)
+    return [(r - min_r, col - min_c) for r, col in c]
+
+
+def _piece_bounds(cells):
+    max_r = max(r for r, _ in cells)
+    max_c = max(c for _, c in cells)
+    return max_r + 1, max_c + 1
+
+
+def _build_piece_rotation_cache():
+    cache = {}
+    for name, base_cells in PIECE_SHAPES.items():
+        seen = set()
+        rotations = []
+        for rot in range(4):
+            cells = tuple(_rotate_cells(base_cells, rot))
+            if cells in seen:
+                continue
+            seen.add(cells)
+            height, width = _piece_bounds(cells)
+            rotations.append({
+                'rot': rot,
+                'cells': cells,
+                'height': height,
+                'width': width,
+            })
+        cache[name] = rotations
+    return cache
+
+
+PIECE_ROTATIONS = _build_piece_rotation_cache()
+
 
 def parse_bool_flag(value: str) -> bool:
     value = value.strip().lower()
@@ -193,18 +234,11 @@ class TetrisWeiqi:
 
     @staticmethod
     def rotate_cells(cells: List[Tuple[int,int]], rot: int) -> List[Tuple[int,int]]:
-        c = list(cells)
-        for _ in range(rot % 4):
-            c = [(col, -row) for row, col in c]
-        min_r = min(r for r, _ in c)
-        min_c = min(c_ for _, c_ in c)
-        return [(r - min_r, col - min_c) for r, col in c]
+        return _rotate_cells(cells, rot)
 
     @staticmethod
     def piece_bounds(cells):
-        max_r = max(r for r, _ in cells)
-        max_c = max(c for _, c in cells)
-        return max_r + 1, max_c + 1
+        return _piece_bounds(cells)
 
     # --- Placement Validation ---
 
@@ -219,12 +253,20 @@ class TetrisWeiqi:
         return False
 
     def can_place(self, cells, row: int, col: int, player: int) -> bool:
+        size = self.size
+        board = self.board
         for dr, dc in cells:
             r, c = row + dr, col + dc
-            if r < 0 or r >= self.size or c < 0 or c >= self.size:
+            if r < 0 or r >= size or c < 0 or c >= size:
                 return False
-            if not self._cell_allowed(r, c, player):
-                return False
+            cell = board[r][c]
+            if cell == EMPTY:
+                continue
+            if player == P1 and cell == DEAD2:
+                continue
+            if player == P2 and cell == DEAD1:
+                continue
+            return False
         return True
 
     def is_legal_move(self, cells, row: int, col: int, player: int) -> bool:
@@ -232,20 +274,23 @@ class TetrisWeiqi:
             return False
         # 模拟完整结算顺序，再检查己方是否仍为自杀
         snapshot = [r[:] for r in self.board]
+        placed_positions = []
         converted_cells = set()
         for dr, dc in cells:
             rr, cc = row + dr, col + dc
+            placed_positions.append((rr, cc))
             if self.board[rr][cc] in (DEAD1, DEAD2):
                 converted_cells.add((rr, cc))
             self.board[rr][cc] = player
         self._resolve_placement_effects(
             player,
             allow_self_capture=False,
+            placed_positions=placed_positions,
             converted_cells=converted_cells,
             previous_board=snapshot
         )
         inactive = converted_cells if self.dead_zone_activation_mode == 'next_turn' else None
-        self_dead = self._has_dead_groups(player, inactive, snapshot)
+        self_dead = self._has_dead_group_from_cells(player, placed_positions, inactive, snapshot)
         self.board = snapshot
         return not self_dead
 
@@ -253,10 +298,12 @@ class TetrisWeiqi:
         piece = self.pieces[player]
         if not piece:
             return False
-        for rot in range(4):
-            cells = self.rotate_cells(piece['cells'], rot)
-            for r in range(self.size):
-                for c in range(self.size):
+        for rotation in PIECE_ROTATIONS[piece['name']]:
+            cells = rotation['cells']
+            max_row = self.size - rotation['height'] + 1
+            max_col = self.size - rotation['width'] + 1
+            for r in range(max_row):
+                for c in range(max_col):
                     if self.is_legal_move(cells, r, c, player):
                         return True
         return False
@@ -267,17 +314,14 @@ class TetrisWeiqi:
         piece = self.pieces[player]
         if not piece:
             return moves
-        seen = set()
-        for rot in range(4):
-            cells = self.rotate_cells(piece['cells'], rot)
-            cells_key = tuple(sorted(cells))
-            if cells_key in seen:
-                continue
-            seen.add(cells_key)
-            for r in range(self.size):
-                for c in range(self.size):
+        for rotation in PIECE_ROTATIONS[piece['name']]:
+            cells = rotation['cells']
+            max_row = self.size - rotation['height'] + 1
+            max_col = self.size - rotation['width'] + 1
+            for r in range(max_row):
+                for c in range(max_col):
                     if self.is_legal_move(cells, r, c, player):
-                        moves.append({'rot': rot, 'row': r, 'col': c, 'cells': cells})
+                        moves.append({'rot': rotation['rot'], 'row': r, 'col': c, 'cells': cells})
         return moves
 
     # --- Capture Logic ---
@@ -289,65 +333,120 @@ class TetrisWeiqi:
             return previous_board[row][col]
         return self.board[row][col]
 
-    def _get_group(self, row: int, col: int, visited: Set[int],
+    def _get_group(self, row: int, col: int, visited,
                    inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
                    previous_board: Optional[List[List[int]]] = None):
-        owner = self._cell_at(row, col, inactive_conversions, previous_board)
+        size = self.size
+        board = self.board
+        has_inactive = inactive_conversions is not None and previous_board is not None
+        owner = previous_board[row][col] if has_inactive and (row, col) in inactive_conversions else board[row][col]
         if owner not in (P1, P2):
             return None
         group = []
-        liberties = set()
+        has_liberty = False
         stack = [(row, col)]
-        visited.add(row * self.size + col)
+        visited[row * size + col] = 1
 
         while stack:
             r, c = stack.pop()
             group.append((r, c))
-            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+            for dr, dc in NEIGHBORS:
                 nr, nc = r + dr, c + dc
-                if nr < 0 or nr >= self.size or nc < 0 or nc >= self.size:
+                if nr < 0 or nr >= size or nc < 0 or nc >= size:
                     continue
-                k = nr * self.size + nc
-                if k in visited:
+                k = nr * size + nc
+                if visited[k]:
                     continue
-                cell = self._cell_at(nr, nc, inactive_conversions, previous_board)
+                cell = previous_board[nr][nc] if has_inactive and (nr, nc) in inactive_conversions else board[nr][nc]
                 if cell == EMPTY:
-                    liberties.add(k)
+                    has_liberty = True
                 elif cell == owner:
-                    visited.add(k)
+                    visited[k] = 1
                     stack.append((nr, nc))
-        return {'owner': owner, 'group': group, 'liberties': len(liberties)}
+        return {'owner': owner, 'group': group, 'has_liberty': has_liberty}
 
     def _capture_groups_of(self, target: int,
+                           candidates=None,
                            inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
                            previous_board: Optional[List[List[int]]] = None) -> int:
         dead_mark = DEAD1 if target == P1 else DEAD2
-        visited = set()
+        size = self.size
+        board = self.board
+        has_inactive = inactive_conversions is not None and previous_board is not None
+        visited = bytearray(size * size)
         total = 0
-        for r in range(self.size):
-            for c in range(self.size):
-                k = r * self.size + c
-                if k in visited or self._cell_at(r, c, inactive_conversions, previous_board) != target:
+        if candidates is None:
+            for r in range(size):
+                for c in range(size):
+                    k = r * size + c
+                    cell = previous_board[r][c] if has_inactive and (r, c) in inactive_conversions else board[r][c]
+                    if visited[k] or cell != target:
+                        continue
+                    g = self._get_group(r, c, visited, inactive_conversions, previous_board)
+                    if g and not g['has_liberty']:
+                        for gr, gc in g['group']:
+                            board[gr][gc] = dead_mark
+                        total += len(g['group'])
+        else:
+            candidate_marks = bytearray(size * size)
+            for r, c in candidates:
+                if 0 <= r < size and 0 <= c < size:
+                    candidate_marks[r * size + c] = 1
+                for dr, dc in NEIGHBORS:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < size and 0 <= nc < size:
+                        candidate_marks[nr * size + nc] = 1
+            for k, marked in enumerate(candidate_marks):
+                if not marked or visited[k]:
+                    continue
+                r = k // size
+                c = k % size
+                cell = previous_board[r][c] if has_inactive and (r, c) in inactive_conversions else board[r][c]
+                if cell != target:
                     continue
                 g = self._get_group(r, c, visited, inactive_conversions, previous_board)
-                if g and g['liberties'] == 0:
+                if g and not g['has_liberty']:
                     for gr, gc in g['group']:
-                        self.board[gr][gc] = dead_mark
+                        board[gr][gc] = dead_mark
                     total += len(g['group'])
         return total
 
     def _has_dead_groups(self, player: int,
                          inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
                          previous_board: Optional[List[List[int]]] = None) -> bool:
-        visited = set()
-        for r in range(self.size):
-            for c in range(self.size):
-                k = r * self.size + c
-                if k in visited or self._cell_at(r, c, inactive_conversions, previous_board) != player:
+        size = self.size
+        board = self.board
+        has_inactive = inactive_conversions is not None and previous_board is not None
+        visited = bytearray(size * size)
+        for r in range(size):
+            for c in range(size):
+                k = r * size + c
+                cell = previous_board[r][c] if has_inactive and (r, c) in inactive_conversions else board[r][c]
+                if visited[k] or cell != player:
                     continue
                 g = self._get_group(r, c, visited, inactive_conversions, previous_board)
-                if g and g['liberties'] == 0:
+                if g and not g['has_liberty']:
                     return True
+        return False
+
+    def _has_dead_group_from_cells(self, player: int, cells,
+                                   inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
+                                   previous_board: Optional[List[List[int]]] = None) -> bool:
+        size = self.size
+        board = self.board
+        has_inactive = inactive_conversions is not None and previous_board is not None
+        visited = bytearray(size * size)
+
+        for r, c in cells:
+            cell = previous_board[r][c] if has_inactive and (r, c) in inactive_conversions else board[r][c]
+            if cell != player:
+                continue
+            k = r * size + c
+            if visited[k]:
+                continue
+            g = self._get_group(r, c, visited, inactive_conversions, previous_board)
+            if g and not g['has_liberty']:
+                return True
         return False
 
     # --- Line Clear ---
@@ -362,20 +461,48 @@ class TetrisWeiqi:
         return self.dead_zone_fills_line
 
     def _check_line_clears(self,
+                           candidates=None,
                            inactive_conversions: Optional[Set[Tuple[int, int]]] = None,
                            previous_board: Optional[List[List[int]]] = None) -> int:
+        size = self.size
+        board = self.board
+        has_inactive = inactive_conversions is not None and previous_board is not None
         cleared = 0
-        for r in range(self.size):
-            if all(self._cell_fills_line(self._cell_at(r, c, inactive_conversions, previous_board))
-                   for c in range(self.size)):
-                for c in range(self.size):
-                    self.board[r][c] = EMPTY
+        if candidates is None:
+            rows = range(size)
+            cols = range(size)
+        else:
+            row_marks = bytearray(size)
+            col_marks = bytearray(size)
+            for r, c in candidates:
+                if 0 <= r < size:
+                    row_marks[r] = 1
+                if 0 <= c < size:
+                    col_marks[c] = 1
+            rows = (idx for idx, marked in enumerate(row_marks) if marked)
+            cols = (idx for idx, marked in enumerate(col_marks) if marked)
+
+        for r in rows:
+            full = True
+            for c in range(size):
+                cell = previous_board[r][c] if has_inactive and (r, c) in inactive_conversions else board[r][c]
+                if not self._cell_fills_line(cell):
+                    full = False
+                    break
+            if full:
+                for c in range(size):
+                    board[r][c] = EMPTY
                 cleared += 1
-        for c in range(self.size):
-            if all(self._cell_fills_line(self._cell_at(r, c, inactive_conversions, previous_board))
-                   for r in range(self.size)):
-                for r in range(self.size):
-                    self.board[r][c] = EMPTY
+        for c in cols:
+            full = True
+            for r in range(size):
+                cell = previous_board[r][c] if has_inactive and (r, c) in inactive_conversions else board[r][c]
+                if not self._cell_fills_line(cell):
+                    full = False
+                    break
+            if full:
+                for r in range(size):
+                    board[r][c] = EMPTY
                 cleared += 1
         return cleared
 
@@ -415,6 +542,7 @@ class TetrisWeiqi:
     # --- Game Flow ---
 
     def _resolve_placement_effects(self, player: int, allow_self_capture: bool = True,
+                                   placed_positions=None,
                                    converted_cells: Optional[Set[Tuple[int, int]]] = None,
                                    previous_board: Optional[List[List[int]]] = None) -> Dict:
         opponent = P2 if player == P1 else P1
@@ -427,35 +555,38 @@ class TetrisWeiqi:
             prior = previous_board
 
         if self.resolution_mode == 'clear_then_capture':
-            lines_cleared = self._check_line_clears(inactive, prior)
-            captured += self._capture_groups_of(opponent, inactive, prior)
+            lines_cleared = self._check_line_clears(placed_positions, inactive, prior)
+            captured += self._capture_groups_of(opponent, placed_positions, inactive, prior)
             if allow_self_capture:
-                self._capture_groups_of(player, inactive, prior)
+                self._capture_groups_of(player, placed_positions, inactive, prior)
             return {'captured': captured, 'lines_cleared': lines_cleared}
 
-        captured += self._capture_groups_of(opponent, inactive, prior)
+        captured += self._capture_groups_of(opponent, placed_positions, inactive, prior)
         if allow_self_capture:
-            self._capture_groups_of(player, inactive, prior)
-        lines_cleared = self._check_line_clears(inactive, prior)
+            self._capture_groups_of(player, placed_positions, inactive, prior)
+        lines_cleared = self._check_line_clears(placed_positions, inactive, prior)
 
         if self.resolution_mode == 'capture_then_clear_recheck' and lines_cleared > 0:
-            captured += self._capture_groups_of(opponent, inactive, prior)
+            captured += self._capture_groups_of(opponent, None, inactive, prior)
             if allow_self_capture:
-                self._capture_groups_of(player, inactive, prior)
+                self._capture_groups_of(player, None, inactive, prior)
 
         return {'captured': captured, 'lines_cleared': lines_cleared}
 
     def place_piece(self, cells, row: int, col: int, player: int) -> Dict:
         snapshot = [r[:] for r in self.board]
+        placed_positions = []
         converted_cells = set()
         for dr, dc in cells:
             rr, cc = row + dr, col + dc
+            placed_positions.append((rr, cc))
             if self.board[rr][cc] in (DEAD1, DEAD2):
                 converted_cells.add((rr, cc))
             self.board[rr][cc] = player
         return self._resolve_placement_effects(
             player,
             allow_self_capture=True,
+            placed_positions=placed_positions,
             converted_cells=converted_cells,
             previous_board=snapshot
         )
