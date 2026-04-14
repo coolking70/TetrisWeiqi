@@ -250,6 +250,8 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
   <button class="primary" onclick="startGame()">开始游戏</button>
   <button class="rotate-btn" onclick="rotatePiece()">旋转(R)</button>
   <button class="skip-btn" onclick="skipTurn()">跳过</button>
+  <button id="btnSound" onclick="toggleSound()" style="background:#1a1a2e;border:1px solid #555;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:16px;">🔊</button>
+  <button id="btnBgm" onclick="toggleBgm()" style="background:#1a1a2e;border:1px solid #555;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:16px;">🎵</button>
 </div>
 
 <div class="status-bar" id="statusBar">点击"开始游戏"开始</div>
@@ -359,6 +361,64 @@ let boardCanvas, boardCtx, previewP1, prevCtx1, previewP2, prevCtx2;
 let animations = []; // { type, cells, color, startTime, duration }
 let animFrameId = null;
 
+// Audio system
+const SFX = {
+  place: null, capture: null, clear: null,
+  rotate: null, gameOver: null, gameStart: null,
+};
+let bgm = null;
+let soundEnabled = true;
+let bgmEnabled = true;
+
+function initAudio() {
+  SFX.place     = new Audio('sounds/place.mp3');
+  SFX.capture   = new Audio('sounds/capture.mp3');
+  SFX.clear     = new Audio('sounds/clear.mp3');
+  SFX.rotate    = new Audio('sounds/rotate.mp3');
+  SFX.gameOver  = new Audio('sounds/gameover.mp3');
+  SFX.gameStart = new Audio('sounds/gamestart.mp3');
+  for (const k of Object.keys(SFX)) {
+    SFX[k].volume = 0.5;
+    SFX[k].preload = 'auto';
+  }
+  bgm = new Audio('sounds/bgm.mp3');
+  bgm.loop = true;
+  bgm.volume = 0.3;
+  bgm.preload = 'auto';
+}
+
+function playSfx(name) {
+  if (!soundEnabled || !SFX[name]) return;
+  try {
+    const s = SFX[name];
+    s.currentTime = 0;
+    s.play().catch(() => {});
+  } catch (e) {}
+}
+
+function playBgm() {
+  if (!bgmEnabled || !bgm) return;
+  bgm.play().catch(() => {});
+}
+
+function stopBgm() {
+  if (!bgm) return;
+  bgm.pause();
+  bgm.currentTime = 0;
+}
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  document.getElementById('btnSound').textContent = soundEnabled ? '🔊' : '🔇';
+}
+
+function toggleBgm() {
+  bgmEnabled = !bgmEnabled;
+  document.getElementById('btnBgm').textContent = bgmEnabled ? '🎵' : '🎵✕';
+  if (bgmEnabled && gameActive) playBgm();
+  else stopBgm();
+}
+
 // ONNX Neural Network AI
 let onnxSession = null;
 let onnxLoading = false;
@@ -449,6 +509,8 @@ function startGame() {
   updatePanels();
   setStatus(playerName(P1) + ' 的回合');
   render();
+  playSfx('gameStart');
+  playBgm();
 }
 
 // ============================================================
@@ -772,6 +834,8 @@ function skipTurn() {
 
 function endGame() {
   gameActive = false;
+  stopBgm();
+  playSfx('gameOver');
   const s1 = countPieces(P1), s2 = countPieces(P2);
 
   let result;
@@ -862,6 +926,10 @@ function aiMove() {
   if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
   setStatus(msg);
 
+  if (result.captured > 0) playSfx('capture');
+  else if (result.linesCleared > 0) playSfx('clear');
+  else playSfx('place');
+
   generatePiece(P2);
   updatePanels();
   render();
@@ -915,11 +983,37 @@ function evaluateAI(row, col, cells, captured, linesCleared, level) {
 // Neural Network AI (ONNX)
 // ============================================================
 async function loadOnnxModel() {
-  if (onnxSession || onnxLoading) return onnxSession;
+  if (onnxSession) return onnxSession;
+  if (onnxLoading) {
+    // Wait for in-progress load to finish
+    while (onnxLoading) await new Promise(r => setTimeout(r, 100));
+    return onnxSession;
+  }
   onnxLoading = true;
-  setStatus('加载神经网络模型...');
+  setStatus('加载神经网络模型... 0%');
   try {
-    onnxSession = await ort.InferenceSession.create(ONNX_MODEL_PATH);
+    const resp = await fetch(ONNX_MODEL_PATH);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const total = parseInt(resp.headers.get('content-length') || '0');
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      if (total > 0) {
+        const pct = Math.min(99, Math.round(loaded / total * 100));
+        setStatus(`加载神经网络模型... ${pct}%`);
+      }
+    }
+    const buf = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) { buf.set(chunk, offset); offset += chunk.length; }
+    setStatus('加载神经网络模型... 初始化中');
+    onnxSession = await ort.InferenceSession.create(buf.buffer);
+    setStatus('神经网络模型已加载');
     console.log('ONNX model loaded');
   } catch (e) {
     console.error('ONNX load failed:', e);
@@ -1048,6 +1142,10 @@ async function neuralNetworkMove() {
   if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
   if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
   setStatus(msg);
+
+  if (result.captured > 0) playSfx('capture');
+  else if (result.linesCleared > 0) playSfx('clear');
+  else playSfx('place');
 
   generatePiece(P2);
   updatePanels();
@@ -1490,6 +1588,10 @@ async function mctsMove() {
   if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
   setStatus(msg);
 
+  if (result.captured > 0) playSfx('capture');
+  else if (result.linesCleared > 0) playSfx('clear');
+  else playSfx('place');
+
   generatePiece(P2);
   updatePanels();
   render();
@@ -1529,6 +1631,7 @@ function onKeyDown(e) {
 function rotatePiece() {
   if (!gameActive) return;
   rotation = (rotation + 1) % 4;
+  playSfx('rotate');
   render();
   renderPreview(currentPlayer);
 }
@@ -1643,6 +1746,11 @@ function doPlace() {
   if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
   if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
   setStatus(msg);
+
+  // Play sound: capture > clear > place (priority order)
+  if (result.captured > 0) playSfx('capture');
+  else if (result.linesCleared > 0) playSfx('clear');
+  else playSfx('place');
 
   generatePiece(currentPlayer);
   ghostPos = null;
@@ -1963,6 +2071,10 @@ function updateMctsLabel() {
 function onAiLevelChange() {
   const level = document.getElementById('aiLevelSelect').value;
   document.getElementById('mctsSliderWrap').style.display = level === '5' ? '' : 'none';
+  // Preload ONNX model when neural network levels are selected
+  if (level === '4' || level === '5') {
+    loadOnnxModel();
+  }
 }
 
 // ============================================================
@@ -1970,6 +2082,7 @@ function onAiLevelChange() {
 // ============================================================
 window.addEventListener('load', () => {
   init();
+  initAudio();
   document.getElementById('aiLevelSelect').addEventListener('change', onAiLevelChange);
   onAiLevelChange();
 });
