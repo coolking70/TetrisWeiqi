@@ -284,8 +284,8 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
   <div class="legend-item"><div class="legend-swatch" style="background:#4fc3f7"></div> 玩家1</div>
   <div class="legend-item"><div class="legend-swatch" style="background:#e040fb"></div> 玩家2</div>
   <div class="legend-item"><div class="legend-swatch" style="background:#3d1a1a"></div> 死亡区域</div>
-  <span class="desktop-hint">鼠标预览 | 点击落子 | R旋转 | 方向键微调</span>
-  <span class="mobile-hint">触屏拖动预览 | 松手落子 | 双指旋转</span>
+  <span class="desktop-hint">鼠标预览 | 点击落子 | R/右键旋转 | 方向键微调</span>
+  <span class="mobile-hint">触屏拖动预览 | 松手落子 | 点击棋盘外旋转</span>
 </div>
 
 <!-- Mobile touch controls -->
@@ -382,10 +382,19 @@ function init() {
   boardCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); rotatePiece(); });
   document.addEventListener('keydown', onKeyDown);
 
-  // Touch events
+  // Touch events (board)
   boardCanvas.addEventListener('touchstart', onTouchStart, { passive: false });
   boardCanvas.addEventListener('touchmove', onTouchMove, { passive: false });
   boardCanvas.addEventListener('touchend', onTouchEnd, { passive: false });
+
+  // Tap outside board = rotate piece (touch devices)
+  document.addEventListener('touchstart', (e) => {
+    if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
+    // Ignore taps on the board canvas, buttons, and interactive elements
+    const t = e.target;
+    if (t === boardCanvas || t.closest('button, select, input, .mobile-controls, #gameOverOverlay')) return;
+    rotatePiece();
+  });
 
   resizeBoard();
   render();
@@ -1528,7 +1537,6 @@ function rotatePiece() {
 // Touch Input
 // ============================================================
 let touchStartPos = null;
-let touchFingerCount = 0;
 let touchMoved = false;
 
 function getTouchBoardPos(touch) {
@@ -1543,14 +1551,7 @@ function getTouchBoardPos(touch) {
 function onTouchStart(e) {
   e.preventDefault();
   if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
-  touchFingerCount = e.touches.length;
   touchMoved = false;
-
-  // Two-finger tap = rotate
-  if (e.touches.length >= 2) {
-    rotatePiece();
-    return;
-  }
 
   const pos = getTouchBoardPos(e.touches[0]);
   ghostPos = pos;
@@ -1570,8 +1571,6 @@ function onTouchMove(e) {
 function onTouchEnd(e) {
   e.preventDefault();
   if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
-  if (touchFingerCount >= 2) return; // was a rotate gesture
-
   // If didn't move much, treat as tap-to-place
   if (!touchMoved && ghostPos) {
     const cells = getCurrentCells();
