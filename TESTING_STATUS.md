@@ -1,6 +1,6 @@
 # TetrisWeiqi Testing Status
 
-Last updated: 2026-04-14
+Last updated: 2026-04-15
 
 ## Current Go-Style Mainline Rules
 
@@ -182,20 +182,23 @@ Recommended training baseline:
 
 Recommended 4070 Ti SUPER training profile under the current Go-style mainline:
 
-1. `games-per-iter = 36`
-2. `num-simulations = 24`
+1. `games-per-iter = 24`
+2. `num-simulations = 16`
 3. `selfplay-parallel-games = 10`
 4. `inference-batch-size = 40`
 5. `batch-size = 512`
 6. `lr = 0.0015`
 7. `lr-step-size = 15`
 8. `lr-gamma = 0.9`
-9. `train-steps-per-iter = 24`
+9. `dirichlet-alpha = 0.05`
+10. `dirichlet-epsilon = 0.10`
+11. `train-steps-per-iter = 16`
 
 Chinese summary:
-This profile uses more fresh self-play data per iteration and a fixed moderate
-amount of training updates, which currently looks better than the older
-`24 games + auto/min_train_batches` setup.
+This profile is the current post-fix stable baseline. It keeps the corrected
+search implementation, uses light root exploration noise, and avoids the less
+stable combinations that stacked higher simulations and higher train steps at
+the same time.
 
 ## Training Parameter Retuning Under Go-Style Mainline
 
@@ -288,6 +291,123 @@ Interpretation:
 2. but longer training does not reliably keep improving all the way through `40`
 3. the current bottleneck looks more like mid/late training stability than raw training length
 
+## Search Correctness And Exploration Fixes
+
+The training stack was updated again to fix three quality-critical issues:
+
+1. MCTS game clones now copy RNG state correctly
+2. self-play root nodes now support Dirichlet exploration noise
+3. legal-move priors now fall back to a uniform distribution when the summed legal prior collapses to zero
+
+Interpretation:
+
+1. the old search path could diverge from the real environment after future piece draws or rerolls
+2. the new path is more correct, but also changes the effective training dynamics
+3. so post-fix training curves should be compared carefully against pre-fix curves
+
+## Dirichlet Noise Strength Tuning
+
+Three short post-fix training tests were run to tune root exploration noise:
+
+1. `checkpoints_noise_std_short`
+   - config: `dirichlet-alpha=0.3`, `dirichlet-epsilon=0.25`
+   - best eval winrate: `40.0%`
+2. `checkpoints_noise_mid_short`
+   - config: `dirichlet-alpha=0.15`, `dirichlet-epsilon=0.15`
+   - best eval winrate: `28.3%`
+3. `checkpoints_noise_light_short`
+   - config: `dirichlet-alpha=0.05`, `dirichlet-epsilon=0.10`
+   - best eval winrate: `45.0%`
+
+Conclusion:
+
+1. root exploration noise should be kept
+2. the earlier standard AlphaZero-style noise was too strong for the current game
+3. a lighter noise setting currently looks like the best default
+
+## 20-Iteration Long Run With Light Root Noise
+
+A full `20`-iteration run was completed after the search fixes and light-noise update:
+
+`checkpoints_mainline_c_v2`
+
+Evaluation checkpoints:
+
+1. Iteration `5`: `29.2%` heuristic winrate (`35-75-10`)
+2. Iteration `10`: `30.8%` heuristic winrate (`37-72-11`)
+3. Iteration `15`: `30.0%` heuristic winrate (`36-80-4`)
+4. Iteration `20`: `34.2%` heuristic winrate (`41-73-6`)
+
+Interpretation:
+
+1. lighter noise is better than the heavier post-fix noise settings
+2. but the fully corrected training stack has not yet reproduced the older pre-fix `43.3%` peak
+3. the project is now on a more trustworthy search implementation, but additional training retuning is still needed
+
+## Post-Fix Retuning Summary
+
+Several post-fix retuning sweeps were run under the corrected search stack.
+
+Short `10`-iteration comparison:
+
+1. `checkpoints_postfix_baseline`
+   - config: `24 games`, `16 sims`, `16 train_steps`
+   - best eval winrate: `40.0%`
+2. `checkpoints_postfix_more_data`
+   - config: `36 games`, `16 sims`, `16 train_steps`
+   - best eval winrate: `30.0%`
+3. `checkpoints_postfix_more_search`
+   - config: `24 games`, `24 sims`, `16 train_steps`
+   - best eval winrate: `41.7%`
+4. `checkpoints_postfix_more_train`
+   - config: `24 games`, `16 sims`, `24 train_steps`
+   - best eval winrate: `41.7%`
+
+Interpretation:
+
+1. simply adding more self-play games per iteration is not the current main direction
+2. stronger search or more train steps can help in short runs
+3. but stacking both increases together in a formal long run did not stay stable enough to become the new default
+
+Formal `20`-iteration combination check:
+
+1. `24 games`, `24 sims`, `24 train_steps`
+   - best eval winrate: `33.3%`
+
+So the project currently keeps the lighter post-fix baseline as the safer
+default, while larger search/training combinations remain experimental.
+
+## Evaluation Caveat
+
+Additional layered evaluation was used to sanity-check whether the model is
+really becoming stronger in a human-meaningful sense.
+
+Using `checkpoints_postfix_baseline/best.pt`:
+
+1. vs pure random: `35.0%`
+2. vs weak random + heuristic mix: about `46.7%` to `47.5%`
+3. vs `heuristic_lv1`: `56.7%`
+4. vs `heuristic_lv2`: `28.3%`
+
+Interpretation:
+
+1. the current model should not yet be described as clearly stronger than random play
+2. the existing heuristic baselines are useful, but they are not sufficient as the only long-term yardstick
+3. future training should prioritize strategy growth and self-improvement over chasing a single benchmark number
+
+## Long-Term Training Direction
+
+The long-term goal is not merely to beat random or exploit one heuristic AI.
+The goal is a model that can face humans, keeps improving over time, and shows
+clearer strategic behavior.
+
+This changes the preferred direction:
+
+1. keep the corrected search stack and the stable post-fix baseline
+2. treat `vs_random` only as a sanity check, not the final target
+3. strengthen evaluation around self-improvement, fixed old checkpoints, and strategy probes
+4. prioritize whether the model is learning capture timing, defense, shape, and tradeoffs, not only headline winrate
+
 ## Mid-Late Training Stability Tuning
 
 Three controlled `30`-iteration training-strategy tests were run:
@@ -334,5 +454,6 @@ Interpretation:
 
 ## Next Suggested Step
 
-The next useful step is a longer training run under the updated slower-decay
-profile, followed by evaluation against the same fixed heuristic and head-to-head setup.
+The next useful step is to upgrade evaluation from a single benchmark into a
+multi-axis framework, then continue training from the stable corrected
+baseline rather than chasing one short-term winrate number.

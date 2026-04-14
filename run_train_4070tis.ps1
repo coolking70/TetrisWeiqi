@@ -16,16 +16,18 @@ python cli\train_alphazero.py `
   --resolution-mode capture_then_clear_once `
   --dead-zone-activation-mode immediate `
   --no-legal-move-rerolls 1 `
-  --games-per-iter 36 `
+  --games-per-iter 24 `
   --selfplay-parallel-games 10 `
-  --num-simulations 24 `
+  --num-simulations 16 `
   --inference-batch-size 40 `
   --batch-size 512 `
   --lr 0.0015 `
   --lr-step-size 15 `
   --lr-gamma 0.9 `
+  --dirichlet-alpha 0.05 `
+  --dirichlet-epsilon 0.10 `
   --iterations 20 `
-  --train-steps-per-iter 24 `
+  --train-steps-per-iter 16 `
   --eval-every 5 `
   --eval-games 120 `
   --eval-num-simulations 12 `

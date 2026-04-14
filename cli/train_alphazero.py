@@ -85,6 +85,26 @@ def maybe_compile_model(model: nn.Module, enabled: bool):
         print(f'[Compile] 启用失败，回退到 eager: {exc}')
         return model, False
 
+
+def parse_positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f'无效正浮点数: {value}') from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f'无效正浮点数: {value}')
+    return parsed
+
+
+def parse_probability(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f'无效概率: {value}') from exc
+    if parsed < 0.0 or parsed > 1.0:
+        raise argparse.ArgumentTypeError(f'无效概率: {value}')
+    return parsed
+
 DEVICE = get_device()
 configure_torch_runtime(DEVICE)
 print(f'[Device] {DEVICE}')
@@ -307,7 +327,8 @@ class MCTSNode:
 class MCTS:
     def __init__(self, model: PolicyValueNet, num_simulations=50, c_puct=1.5,
                  temperature=1.0, device=DEVICE, use_amp=True,
-                 inference_batch_size=1):
+                 inference_batch_size=1, add_root_noise=False,
+                 dirichlet_alpha=0.3, dirichlet_epsilon=0.25):
         self.model = model
         self.num_simulations = num_simulations
         self.c_puct = c_puct
@@ -315,6 +336,9 @@ class MCTS:
         self.device = device
         self.use_amp = use_amp and device.type in ('cuda', 'mps')
         self.inference_batch_size = max(1, inference_batch_size)
+        self.add_root_noise = add_root_noise
+        self.dirichlet_alpha = dirichlet_alpha
+        self.dirichlet_epsilon = dirichlet_epsilon
 
     @torch.no_grad()
     def _predict(self, game: TetrisWeiqi, player: int):
@@ -354,14 +378,26 @@ class MCTS:
             idx = action_to_index(move['rot'], move['row'], move['col'], game.size)
             total_prior += policy[idx]
 
+        use_uniform_prior = total_prior <= 1e-8
+        uniform_prior = 1.0 / len(legal_moves)
+
         for move in legal_moves:
             idx = action_to_index(move['rot'], move['row'], move['col'], game.size)
-            prior = policy[idx] / (total_prior + 1e-8)
+            prior = uniform_prior if use_uniform_prior else (policy[idx] / total_prior)
             child = MCTSNode(parent=node, action=(move['rot'], move['row'], move['col']), prior=prior)
             node.children.append(child)
 
         node.is_expanded = True
         return value
+
+    def _apply_root_dirichlet_noise(self, root: MCTSNode):
+        if not self.add_root_noise or not root.children:
+            return
+        noise = np.random.dirichlet([self.dirichlet_alpha] * len(root.children))
+        mix = self.dirichlet_epsilon
+        base = 1.0 - mix
+        for child, noise_value in zip(root.children, noise):
+            child.prior = base * child.prior + mix * float(noise_value)
 
     def _expand(self, node: MCTSNode, game: TetrisWeiqi):
         player = game.current_player
@@ -398,7 +434,7 @@ class MCTS:
         sim_game.move_number = game.move_number
         sim_game.game_over = game.game_over
         sim_game.winner = game.winner
-        sim_game.rng = random.Random()
+        sim_game.rng.setstate(game.rng.getstate())
         return sim_game
 
     def _prepare_leaf_request(self, root: MCTSNode, game: TetrisWeiqi):
@@ -448,6 +484,7 @@ class MCTS:
 
         # Expand root
         value = self._expand(root, game)
+        self._apply_root_dirichlet_noise(root)
         root.backpropagate(value)
 
         remaining = self.num_simulations - 1
@@ -518,6 +555,7 @@ class MCTS:
             value = self._expand_with_prediction(
                 root, root_games[i], root_policies[i], float(root_values[i])
             )
+            self._apply_root_dirichlet_noise(root)
             root.backpropagate(value)
 
         remaining = [self.num_simulations - 1 for _ in root_games]
@@ -579,6 +617,7 @@ class MCTS:
 def self_play_game(model: PolicyValueNet, num_simulations=50, temperature=1.0,
                    temp_threshold=20, device=DEVICE, use_amp=True,
                    inference_batch_size=1,
+                   dirichlet_alpha=0.3, dirichlet_epsilon=0.25,
                    dead_zone_fills_line=True,
                    score_dead_zone_weight=0.0,
                    piece_distribution='bag7',
@@ -610,7 +649,8 @@ def self_play_game(model: PolicyValueNet, num_simulations=50, temperature=1.0,
     )
     mcts = MCTS(
         model, num_simulations=num_simulations, device=device, use_amp=use_amp,
-        inference_batch_size=inference_batch_size
+        inference_batch_size=inference_batch_size, add_root_noise=True,
+        dirichlet_alpha=dirichlet_alpha, dirichlet_epsilon=dirichlet_epsilon
     )
     data = []
 
@@ -649,6 +689,7 @@ def self_play_game(model: PolicyValueNet, num_simulations=50, temperature=1.0,
 def self_play_games_parallel(model: PolicyValueNet, num_games=1, num_simulations=50,
                              temperature=1.0, temp_threshold=20, device=DEVICE,
                              use_amp=True, inference_batch_size=16,
+                             dirichlet_alpha=0.3, dirichlet_epsilon=0.25,
                              dead_zone_fills_line=True,
                              score_dead_zone_weight=0.0,
                              piece_distribution='bag7',
@@ -667,7 +708,8 @@ def self_play_games_parallel(model: PolicyValueNet, num_games=1, num_simulations
 
     mcts = MCTS(
         model, num_simulations=num_simulations, device=device, use_amp=use_amp,
-        inference_batch_size=inference_batch_size
+        inference_batch_size=inference_batch_size, add_root_noise=True,
+        dirichlet_alpha=dirichlet_alpha, dirichlet_epsilon=dirichlet_epsilon
     )
 
     games = [
@@ -1064,6 +1106,7 @@ def parse_int_list(spec: str) -> List[int]:
 def run_selfplay_batch(model: PolicyValueNet, optimizer, replay_buffer: ReplayBuffer,
                        batch_games: int, num_simulations: int, batch_size: int,
                        device, use_amp: bool, scaler, inference_batch_size: int,
+                       dirichlet_alpha: float, dirichlet_epsilon: float,
                        dead_zone_fills_line: bool, score_dead_zone_weight: float,
                        piece_distribution: str, terminal_mode: str,
                        allow_voluntary_skip: bool, end_condition_mode: str,
@@ -1081,6 +1124,8 @@ def run_selfplay_batch(model: PolicyValueNet, optimizer, replay_buffer: ReplayBu
         device=device,
         use_amp=use_amp,
         inference_batch_size=inference_batch_size,
+        dirichlet_alpha=dirichlet_alpha,
+        dirichlet_epsilon=dirichlet_epsilon,
         dead_zone_fills_line=dead_zone_fills_line,
         score_dead_zone_weight=score_dead_zone_weight,
         piece_distribution=piece_distribution,
@@ -1189,6 +1234,8 @@ def benchmark(args):
             use_amp=use_amp,
             scaler=scaler,
             inference_batch_size=infer_batch,
+            dirichlet_alpha=args.dirichlet_alpha,
+            dirichlet_epsilon=args.dirichlet_epsilon,
             dead_zone_fills_line=args.dead_zone_fills_line,
             score_dead_zone_weight=args.score_dead_zone_weight,
             piece_distribution=args.piece_distribution,
@@ -1409,6 +1456,8 @@ def train(args):
           f'lr={args.lr}, '
           f'lr_step={args.lr_step_size}, '
           f'lr_gamma={args.lr_gamma}, '
+          f'dir_alpha={args.dirichlet_alpha}, '
+          f'dir_eps={args.dirichlet_epsilon}, '
           f'buffer={args.buffer_size}, '
           f'train_steps={args.train_steps_per_iter if args.train_steps_per_iter > 0 else "auto"}, '
           f'min_train_batches={args.min_train_batches}, '
@@ -1434,6 +1483,8 @@ def train(args):
                 device=device,
                 use_amp=use_amp,
                 inference_batch_size=args.inference_batch_size,
+                dirichlet_alpha=args.dirichlet_alpha,
+                dirichlet_epsilon=args.dirichlet_epsilon,
                 dead_zone_fills_line=args.dead_zone_fills_line,
                 score_dead_zone_weight=args.score_dead_zone_weight,
                 piece_distribution=args.piece_distribution,
@@ -1695,6 +1746,10 @@ def main():
     p.add_argument('--lr', type=float, default=0.002, help='学习率')
     p.add_argument('--lr-step-size', type=int, default=10, help='学习率每隔多少轮衰减一次')
     p.add_argument('--lr-gamma', type=float, default=0.8, help='学习率衰减系数')
+    p.add_argument('--dirichlet-alpha', type=parse_positive_float, default=0.3,
+                   help='自对弈根节点 Dirichlet 噪声 alpha')
+    p.add_argument('--dirichlet-epsilon', type=parse_probability, default=0.25,
+                   help='自对弈根节点 Dirichlet 噪声混合系数')
     p.add_argument('--buffer-size', type=int, default=100000, help='经验回放缓冲大小')
     p.add_argument('--resume', type=str, default=None, help='恢复训练的检查点')
     p.add_argument('--device', type=str, default=None,
