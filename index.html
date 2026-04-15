@@ -198,14 +198,29 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
 
 /* Responsive */
 @media (max-width: 600px) {
-  .header h1 { font-size: 20px; }
-  .game-area { flex-direction: column; align-items: center; gap: 6px; }
-  .panel { width: 100%; max-width: 360px; flex-direction: row; flex-wrap: wrap; justify-content: space-around; min-width: auto; padding: 8px; }
-  .panel h2 { width: 100%; font-size: 13px; }
-  .preview-box { min-height: 60px; }
-  .score-value { font-size: 18px; }
-  .top-bar { padding: 4px 6px; gap: 5px; }
-  .top-bar button { padding: 4px 10px; font-size: 12px; }
+  .header { padding: 4px 0 2px; }
+  .header h1 { font-size: 18px; margin: 0; }
+  .header .subtitle { font-size: 10px; margin: 0; }
+  .game-area { flex-direction: column; align-items: center; gap: 4px; }
+  /* Compact panels: single horizontal strip */
+  .panel {
+    width: 100%; max-width: 360px; min-width: auto;
+    flex-direction: row; flex-wrap: nowrap; align-items: center;
+    padding: 4px 8px; gap: 6px;
+  }
+  .panel h2 { width: auto; font-size: 12px; white-space: nowrap; margin: 0; }
+  .score-row { gap: 4px; }
+  .score-label { font-size: 10px; }
+  .score-value { font-size: 16px; }
+  .panel .score-label:not(.score-row .score-label) { display: none; } /* hide "当前方块" text label */
+  .preview-box { min-height: auto; padding: 2px; }
+  .preview-canvas { width: 50px !important; height: 50px !important; }
+  .top-bar { padding: 3px 6px; gap: 4px; flex-wrap: wrap; }
+  .top-bar button { padding: 3px 8px; font-size: 11px; }
+  .top-bar label { font-size: 11px; }
+  .top-bar select, .top-bar input[type="number"] { font-size: 11px; }
+  .status-bar { font-size: 12px; padding: 2px 0; min-height: 16px; }
+  .footer { font-size: 10px; padding: 4px; gap: 6px; }
   .mobile-controls { display: flex; }
   .desktop-hint { display: none; }
   .mobile-hint { display: inline; }
@@ -387,16 +402,16 @@ let animFrameId = null;
 let soundEnabled = true;
 let bgmEnabled = true;
 let audioCtx = null;
-let bgmGain = null;    // master gain for BGM
-let bgmNodes = [];     // active BGM oscillator nodes
-let bgmInterval = null; // BGM scheduling interval
+let bgmGain = null;
+let bgmNodes = [];
+let bgmTimeout = null;
 
 function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
 
-// --- Low-level tone helper ---
+// --- Low-level helpers ---
 function playTone(freq, duration, type, vol) {
   if (!soundEnabled) return;
   try {
@@ -414,8 +429,19 @@ function playTone(freq, duration, type, vol) {
   } catch (e) {}
 }
 
-// --- Synthesized SFX ---
+function schedNote(ctx, dest, freq, start, dur, type, vol) {
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, start);
+  g.gain.setValueAtTime(vol, start + dur * 0.8);
+  g.gain.linearRampToValueAtTime(0.0, start + dur);
+  o.connect(g); g.connect(dest);
+  o.start(start); o.stop(start + dur);
+}
 
+// --- Synthesized SFX ---
 function playSfx(name) {
   if (!soundEnabled) return;
   try {
@@ -423,14 +449,12 @@ function playSfx(name) {
     const t = ctx.currentTime;
     switch (name) {
       case 'place': {
-        // Solid thud: short low sine + click
         const o1 = ctx.createOscillator(); const g1 = ctx.createGain();
         o1.type = 'sine'; o1.frequency.value = 220;
         g1.gain.setValueAtTime(0.4, t);
         g1.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
         o1.connect(g1); g1.connect(ctx.destination);
         o1.start(t); o1.stop(t + 0.12);
-        // Click overtone
         const o2 = ctx.createOscillator(); const g2 = ctx.createGain();
         o2.type = 'square'; o2.frequency.value = 800;
         g2.gain.setValueAtTime(0.15, t);
@@ -440,7 +464,6 @@ function playSfx(name) {
         break;
       }
       case 'capture': {
-        // Dramatic descending sweep + crunch
         const o1 = ctx.createOscillator(); const g1 = ctx.createGain();
         o1.type = 'sawtooth';
         o1.frequency.setValueAtTime(600, t);
@@ -449,10 +472,9 @@ function playSfx(name) {
         g1.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
         o1.connect(g1); g1.connect(ctx.destination);
         o1.start(t); o1.stop(t + 0.35);
-        // Noise burst for crunch texture
         const buf = ctx.createBuffer(1, ctx.sampleRate * 0.08, ctx.sampleRate);
-        const data = buf.getChannelData(0);
-        for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.5;
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.5;
         const ns = ctx.createBufferSource(); ns.buffer = buf;
         const ng = ctx.createGain();
         ng.gain.setValueAtTime(0.2, t + 0.05);
@@ -462,22 +484,19 @@ function playSfx(name) {
         break;
       }
       case 'clear': {
-        // Bright ascending arpeggio (line clear celebration)
-        const notes = [523, 659, 784, 1047]; // C5 E5 G5 C6
+        const notes = [523, 659, 784, 1047];
         notes.forEach((freq, i) => {
           const o = ctx.createOscillator(); const g = ctx.createGain();
-          o.type = 'sine';
-          o.frequency.value = freq;
-          const start = t + i * 0.06;
-          g.gain.setValueAtTime(0.3, start);
-          g.gain.exponentialRampToValueAtTime(0.001, start + 0.2);
+          o.type = 'sine'; o.frequency.value = freq;
+          const s = t + i * 0.06;
+          g.gain.setValueAtTime(0.3, s);
+          g.gain.exponentialRampToValueAtTime(0.001, s + 0.2);
           o.connect(g); g.connect(ctx.destination);
-          o.start(start); o.stop(start + 0.2);
+          o.start(s); o.stop(s + 0.2);
         });
         break;
       }
       case 'rotate': {
-        // Quick pitch-up tick
         const o = ctx.createOscillator(); const g = ctx.createGain();
         o.type = 'sine';
         o.frequency.setValueAtTime(400, t);
@@ -488,33 +507,89 @@ function playSfx(name) {
         o.start(t); o.stop(t + 0.08);
         break;
       }
-      case 'gameOver': {
-        // Sad descending minor chord fade
-        const freqs = [392, 349, 311, 261]; // G4 F4 Eb4 C4
-        freqs.forEach((freq, i) => {
+      case 'gameWin': {
+        // Victory fanfare: bright ascending major + triumphant finish
+        const melody = [
+          [523, 0.12], [659, 0.12], [784, 0.12], [1047, 0.25], // C5 E5 G5 C6
+          [784, 0.12], [1047, 0.4] // G5 C6 (held)
+        ];
+        let off = 0;
+        melody.forEach(([freq, dur]) => {
           const o = ctx.createOscillator(); const g = ctx.createGain();
-          o.type = 'triangle';
-          o.frequency.value = freq;
-          const start = t + i * 0.2;
-          g.gain.setValueAtTime(0.3, start);
-          g.gain.linearRampToValueAtTime(0.0, start + 0.6);
+          o.type = 'square'; o.frequency.value = freq;
+          g.gain.setValueAtTime(0.18, t + off);
+          g.gain.setValueAtTime(0.18, t + off + dur * 0.7);
+          g.gain.linearRampToValueAtTime(0.0, t + off + dur);
           o.connect(g); g.connect(ctx.destination);
-          o.start(start); o.stop(start + 0.6);
+          o.start(t + off); o.stop(t + off + dur);
+          // Octave shimmer
+          const o2 = ctx.createOscillator(); const g2 = ctx.createGain();
+          o2.type = 'sine'; o2.frequency.value = freq * 2;
+          g2.gain.setValueAtTime(0.06, t + off);
+          g2.gain.exponentialRampToValueAtTime(0.001, t + off + dur);
+          o2.connect(g2); g2.connect(ctx.destination);
+          o2.start(t + off); o2.stop(t + off + dur);
+          off += dur;
+        });
+        break;
+      }
+      case 'gameLose': {
+        // Defeat: slow descending minor with fading vibrato
+        const melody = [
+          [392, 0.3], [349, 0.3], [311, 0.35], [262, 0.5] // G4 F4 Eb4 C4
+        ];
+        let off = 0;
+        melody.forEach(([freq, dur]) => {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'triangle'; o.frequency.value = freq;
+          g.gain.setValueAtTime(0.3 - off * 0.15, t + off);
+          g.gain.linearRampToValueAtTime(0.0, t + off + dur);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(t + off); o.stop(t + off + dur);
+          off += dur;
+        });
+        // Low rumble underneath
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = 80;
+        g.gain.setValueAtTime(0.15, t);
+        g.gain.linearRampToValueAtTime(0.0, t + 1.4);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t); o.stop(t + 1.4);
+        break;
+      }
+      case 'gameDraw': {
+        // Draw: neutral wobble, two alternating notes
+        const pairs = [[330, 350], [330, 350], [330, 330]]; // ambiguous, unresolved
+        let off = 0;
+        pairs.forEach(([f1, f2]) => {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'triangle'; o.frequency.value = f1;
+          g.gain.setValueAtTime(0.25, t + off);
+          g.gain.linearRampToValueAtTime(0.0, t + off + 0.2);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(t + off); o.stop(t + off + 0.2);
+          const o2 = ctx.createOscillator(); const g2 = ctx.createGain();
+          o2.type = 'triangle'; o2.frequency.value = f2;
+          g2.gain.setValueAtTime(0.2, t + off + 0.15);
+          g2.gain.linearRampToValueAtTime(0.0, t + off + 0.35);
+          o2.connect(g2); g2.connect(ctx.destination);
+          o2.start(t + off + 0.15); o2.stop(t + off + 0.35);
+          off += 0.3;
         });
         break;
       }
       case 'gameStart': {
-        // Bright fanfare: ascending major triad
-        const notes = [262, 330, 392, 523]; // C4 E4 G4 C5
+        // Bright fanfare: ascending major triad + octave
+        const notes = [262, 330, 392, 523];
         notes.forEach((freq, i) => {
           const o = ctx.createOscillator(); const g = ctx.createGain();
-          o.type = 'square';
-          o.frequency.value = freq;
-          const start = t + i * 0.08;
-          g.gain.setValueAtTime(0.15, start);
-          g.gain.exponentialRampToValueAtTime(0.001, start + 0.25);
+          o.type = 'square'; o.frequency.value = freq;
+          const s = t + i * 0.1;
+          g.gain.setValueAtTime(0.15, s);
+          g.gain.setValueAtTime(0.15, s + 0.18);
+          g.gain.linearRampToValueAtTime(0.0, s + 0.25);
           o.connect(g); g.connect(ctx.destination);
-          o.start(start); o.stop(start + 0.25);
+          o.start(s); o.stop(s + 0.25);
         });
         break;
       }
@@ -532,51 +607,88 @@ function playSkipSfx() {
   setTimeout(() => playTone(330, 0.2, 'sine', 0.2), 100);
 }
 
-// --- Procedural BGM: ambient generative loop ---
+// --- BGM: Korobeiniki (Tetris Theme) variation, looped via Web Audio API ---
 function playBgm() {
   if (!bgmEnabled) return;
   stopBgm();
   try {
     const ctx = getAudioCtx();
     bgmGain = ctx.createGain();
-    bgmGain.gain.value = 0.08;
+    bgmGain.gain.value = 0.12;
     bgmGain.connect(ctx.destination);
 
-    // Pad drone: two detuned oscillators
-    const pad1 = ctx.createOscillator();
-    const pad2 = ctx.createOscillator();
-    pad1.type = 'sine'; pad1.frequency.value = 130.81; // C3
-    pad2.type = 'sine'; pad2.frequency.value = 196.00; // G3
-    const padGain = ctx.createGain(); padGain.gain.value = 0.6;
-    pad1.connect(padGain); pad2.connect(padGain);
-    padGain.connect(bgmGain);
-    pad1.start(); pad2.start();
-    bgmNodes.push(pad1, pad2);
+    // Korobeiniki melody in A minor (simplified, with variations)
+    // Each note: [frequency, duration_in_beats]
+    // 0 = rest
+    const BPM = 140;
+    const beat = 60 / BPM;
+    const melodyA = [
+      // Phrase 1
+      [659, 1], [494, 0.5], [523, 0.5], [587, 1], [523, 0.5], [494, 0.5],
+      [440, 1], [440, 0.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
+      [494, 1], [494, 0.5], [523, 0.5], [587, 1], [659, 1],
+      [523, 1], [440, 1], [440, 1], [0, 1],
+      // Phrase 2
+      [0, 0.5], [587, 1], [698, 0.5], [880, 1], [784, 0.5], [698, 0.5],
+      [659, 1.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
+      [494, 1], [494, 0.5], [523, 0.5], [587, 1], [659, 1],
+      [523, 1], [440, 1], [440, 1], [0, 1],
+    ];
+    // Bass line (simplified root notes)
+    const bassA = [
+      [220, 2], [175, 2], [196, 2], [165, 2],
+      [175, 2], [196, 2], [220, 2], [220, 2],
+      [196, 2], [175, 2], [165, 2], [165, 2],
+      [175, 2], [196, 2], [220, 2], [220, 2],
+    ];
 
-    // Subtle LFO tremolo on pad
-    const lfo = ctx.createOscillator();
-    lfo.type = 'sine'; lfo.frequency.value = 0.3;
-    const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.15;
-    lfo.connect(lfoGain);
-    lfoGain.connect(padGain.gain);
-    lfo.start();
-    bgmNodes.push(lfo);
+    function scheduleMelody(startTime) {
+      let t = startTime;
+      for (const [freq, beats] of melodyA) {
+        const dur = beats * beat;
+        if (freq > 0) {
+          schedNote(ctx, bgmGain, freq, t, dur * 0.9, 'square', 0.12);
+        }
+        t += dur;
+      }
+      return t;
+    }
 
-    // Generative melody: random pentatonic notes at intervals
-    const scale = [262, 294, 330, 392, 440, 523, 587, 659]; // C major pentatonic-ish
-    bgmInterval = setInterval(() => {
+    function scheduleBass(startTime, totalDur) {
+      let t = startTime;
+      while (t < startTime + totalDur) {
+        for (const [freq, beats] of bassA) {
+          if (t >= startTime + totalDur) break;
+          const dur = beats * beat;
+          if (freq > 0) {
+            schedNote(ctx, bgmGain, freq, t, dur * 0.85, 'triangle', 0.10);
+          }
+          t += dur;
+        }
+      }
+    }
+
+    // Calculate one loop duration
+    let loopDur = 0;
+    for (const [, beats] of melodyA) loopDur += beats * beat;
+
+    // Schedule ahead and re-schedule before running out
+    let nextStart = ctx.currentTime + 0.1;
+
+    function scheduleLoop() {
       if (!bgmEnabled || !bgmGain) return;
-      try {
-        const ct = ctx.currentTime;
-        const freq = scale[Math.floor(Math.random() * scale.length)];
-        const o = ctx.createOscillator(); const g = ctx.createGain();
-        o.type = 'sine'; o.frequency.value = freq;
-        g.gain.setValueAtTime(0.15, ct);
-        g.gain.exponentialRampToValueAtTime(0.001, ct + 1.2);
-        o.connect(g); g.connect(bgmGain);
-        o.start(ct); o.stop(ct + 1.2);
-      } catch (e) {}
-    }, 2000 + Math.random() * 1500);
+      // Schedule 2 loops ahead
+      for (let i = 0; i < 2; i++) {
+        scheduleMelody(nextStart);
+        scheduleBass(nextStart, loopDur);
+        nextStart += loopDur;
+      }
+      // Re-schedule before the buffer runs out
+      const waitMs = (loopDur * 1.5) * 1000;
+      bgmTimeout = setTimeout(scheduleLoop, waitMs);
+    }
+
+    scheduleLoop();
   } catch (e) {}
 }
 
@@ -584,13 +696,13 @@ function stopBgm() {
   try {
     bgmNodes.forEach(n => { try { n.stop(); } catch(e) {} });
     bgmNodes = [];
-    if (bgmInterval) { clearInterval(bgmInterval); bgmInterval = null; }
+    if (bgmTimeout) { clearTimeout(bgmTimeout); bgmTimeout = null; }
     if (bgmGain) { bgmGain.disconnect(); bgmGain = null; }
   } catch (e) {}
 }
 
 function initAudio() {
-  // No external files to load — all sounds are synthesized via Web Audio API
+  // No external files — all sounds synthesized via Web Audio API
 }
 
 function toggleSound() {
@@ -1042,15 +1154,22 @@ function skipTurn() {
 function endGame() {
   gameActive = false;
   stopBgm();
-  playSfx('gameOver');
   const s1 = countPieces(P1), s2 = countPieces(P2);
   // 贴目: komi 加到 P2 (后手) 的分数上
   const eff1 = s1, eff2 = s2 + komi;
 
   let result;
-  if (eff1 > eff2) result = playerName(P1) + ' 获胜!';
-  else if (eff2 > eff1) result = playerName(P2) + ' 获胜!';
-  else result = '平局!';
+  if (eff1 > eff2) {
+    result = playerName(P1) + ' 获胜!';
+    // In PvAI mode P1=human, in PvP both are human
+    playSfx(gameMode === 'pvai' ? 'gameWin' : 'gameWin');
+  } else if (eff2 > eff1) {
+    result = playerName(P2) + ' 获胜!';
+    playSfx(gameMode === 'pvai' ? 'gameLose' : 'gameWin');
+  } else {
+    result = '平局!';
+    playSfx('gameDraw');
+  }
 
   document.getElementById('gameOverTitle').textContent = '游戏结束';
   document.getElementById('gameOverResult').textContent = result;
