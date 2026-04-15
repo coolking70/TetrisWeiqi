@@ -417,7 +417,8 @@ class MCTS:
             resolution_mode=game.resolution_mode,
             dead_zone_activation_mode=game.dead_zone_activation_mode,
             no_legal_move_rerolls=game.no_legal_move_rerolls,
-            local_search=game.local_search
+            local_search=game.local_search,
+            komi=game.komi
         )
         sim_game.board = [r[:] for r in game.board]
         sim_game.current_player = game.current_player
@@ -627,7 +628,8 @@ def self_play_game(model: PolicyValueNet, num_simulations=50, temperature=1.0,
                    no_legal_move_mode='reroll_once_then_pass',
                    resolution_mode='capture_then_clear_recheck',
                    dead_zone_activation_mode='immediate',
-                   no_legal_move_rerolls=1) -> List[Tuple]:
+                   no_legal_move_rerolls=1,
+                   komi=0.0) -> List[Tuple]:
     """
     用 MCTS + 神经网络进行一局自对弈，返回训练数据。
 
@@ -645,7 +647,8 @@ def self_play_game(model: PolicyValueNet, num_simulations=50, temperature=1.0,
         resolution_mode=resolution_mode,
         dead_zone_activation_mode=dead_zone_activation_mode,
         no_legal_move_rerolls=no_legal_move_rerolls,
-        local_search=True
+        local_search=True,
+        komi=komi
     )
     mcts = MCTS(
         model, num_simulations=num_simulations, device=device, use_amp=use_amp,
@@ -699,7 +702,8 @@ def self_play_games_parallel(model: PolicyValueNet, num_games=1, num_simulations
                              no_legal_move_mode='reroll_once_then_pass',
                              resolution_mode='capture_then_clear_recheck',
                              dead_zone_activation_mode='immediate',
-                             no_legal_move_rerolls=1) -> List[Tuple]:
+                             no_legal_move_rerolls=1,
+                             komi=0.0) -> List[Tuple]:
     """
     并行推进多局自对弈，并将不同对局中的 MCTS 推理合并批量送入 GPU。
     """
@@ -725,7 +729,8 @@ def self_play_games_parallel(model: PolicyValueNet, num_games=1, num_simulations
             resolution_mode=resolution_mode,
             dead_zone_activation_mode=dead_zone_activation_mode,
             no_legal_move_rerolls=no_legal_move_rerolls,
-            local_search=True
+            local_search=True,
+            komi=komi
         )
         for _ in range(num_games)
     ]
@@ -865,7 +870,8 @@ def evaluate_vs_heuristic(model: PolicyValueNet, num_games=20,
                           dead_zone_activation_mode='immediate',
                           no_legal_move_rerolls=1,
                           parallel_games=1,
-                          seed_base=1000) -> Dict:
+                          seed_base=1000,
+                          komi=0.0) -> Dict:
     """模型 vs 启发式AI，返回结构化评估结果。"""
     model.eval()
     mcts = MCTS(model, num_simulations=num_simulations, temperature=0.1,
@@ -891,7 +897,8 @@ def evaluate_vs_heuristic(model: PolicyValueNet, num_games=20,
                 resolution_mode=resolution_mode,
                 dead_zone_activation_mode=dead_zone_activation_mode,
                 no_legal_move_rerolls=no_legal_move_rerolls,
-                local_search=True
+                local_search=True,
+                komi=komi
             ),
             'heuristic': SimpleAI(ai_level),
             'model_player': P1 if i % 2 == 0 else P2,
@@ -985,7 +992,8 @@ def evaluate_model_vs_model(model_a: PolicyValueNet, model_b: PolicyValueNet, nu
                             resolution_mode='capture_then_clear_recheck',
                             dead_zone_activation_mode='immediate',
                             no_legal_move_rerolls=1,
-                            parallel_games=1, seed_base=5000) -> Dict:
+                            parallel_games=1, seed_base=5000,
+                            komi=0.0) -> Dict:
     """当前模型 A 对最佳模型 B 的 head-to-head 评估。"""
     model_a.eval()
     model_b.eval()
@@ -1016,7 +1024,8 @@ def evaluate_model_vs_model(model_a: PolicyValueNet, model_b: PolicyValueNet, nu
                 resolution_mode=resolution_mode,
                 dead_zone_activation_mode=dead_zone_activation_mode,
                 no_legal_move_rerolls=no_legal_move_rerolls,
-                local_search=True
+                local_search=True,
+                komi=komi
             ),
             'a_player': P1 if i % 2 == 0 else P2,
         })
@@ -1112,15 +1121,18 @@ def run_selfplay_batch(model: PolicyValueNet, optimizer, replay_buffer: ReplayBu
                        allow_voluntary_skip: bool, end_condition_mode: str,
                        no_legal_move_mode: str, resolution_mode: str,
                        dead_zone_activation_mode: str,
-                       no_legal_move_rerolls: int):
+                       no_legal_move_rerolls: int,
+                       selfplay_temperature: float = 1.0,
+                       selfplay_temp_threshold: int = 15,
+                       komi: float = 0.0):
     t0 = time.time()
     model.eval()
     data = self_play_games_parallel(
         model,
         num_games=batch_games,
         num_simulations=num_simulations,
-        temperature=1.0,
-        temp_threshold=15,
+        temperature=selfplay_temperature,
+        temp_threshold=selfplay_temp_threshold,
         device=device,
         use_amp=use_amp,
         inference_batch_size=inference_batch_size,
@@ -1135,7 +1147,8 @@ def run_selfplay_batch(model: PolicyValueNet, optimizer, replay_buffer: ReplayBu
         no_legal_move_mode=no_legal_move_mode,
         resolution_mode=resolution_mode,
         dead_zone_activation_mode=dead_zone_activation_mode,
-        no_legal_move_rerolls=no_legal_move_rerolls
+        no_legal_move_rerolls=no_legal_move_rerolls,
+        komi=komi
     )
     t_selfplay = time.time() - t0
 
@@ -1197,7 +1210,8 @@ def benchmark(args):
           f'no_legal_move_mode={args.no_legal_move_mode} '
           f'resolution_mode={args.resolution_mode} '
           f'dead_zone_activation_mode={args.dead_zone_activation_mode} '
-          f'no_legal_move_rerolls={args.no_legal_move_rerolls}')
+          f'no_legal_move_rerolls={args.no_legal_move_rerolls} '
+          f'komi={args.komi}')
     print(f'[Benchmark] cases={len(combos)}')
     print()
 
@@ -1245,7 +1259,8 @@ def benchmark(args):
             no_legal_move_mode=args.no_legal_move_mode,
             resolution_mode=args.resolution_mode,
             dead_zone_activation_mode=args.dead_zone_activation_mode,
-            no_legal_move_rerolls=args.no_legal_move_rerolls
+            no_legal_move_rerolls=args.no_legal_move_rerolls,
+            komi=args.komi
         )
         metrics.update({
             'parallel_games': parallel_games,
@@ -1448,7 +1463,8 @@ def train(args):
           f'no_legal_move_mode={args.no_legal_move_mode} '
           f'resolution_mode={args.resolution_mode} '
           f'dead_zone_activation_mode={args.dead_zone_activation_mode} '
-          f'no_legal_move_rerolls={args.no_legal_move_rerolls}')
+          f'no_legal_move_rerolls={args.no_legal_move_rerolls} '
+          f'komi={args.komi}')
     print(f'[Config] iterations={args.iterations}, '
           f'games/iter={args.games_per_iter}, '
           f'simulations={args.num_simulations}, '
@@ -1462,7 +1478,9 @@ def train(args):
           f'train_steps={args.train_steps_per_iter if args.train_steps_per_iter > 0 else "auto"}, '
           f'min_train_batches={args.min_train_batches}, '
           f'eval_sims={args.eval_num_simulations}, '
-          f'eval_parallel={args.eval_parallel_games}')
+          f'eval_parallel={args.eval_parallel_games}, '
+          f'sp_temp={args.selfplay_temperature}, '
+          f'sp_temp_thr={args.selfplay_temp_threshold}')
     print()
 
     for iteration in range(start_iter, args.iterations):
@@ -1478,8 +1496,8 @@ def train(args):
                 model,
                 num_games=batch_games,
                 num_simulations=args.num_simulations,
-                temperature=1.0,
-                temp_threshold=15,
+                temperature=args.selfplay_temperature,
+                temp_threshold=args.selfplay_temp_threshold,
                 device=device,
                 use_amp=use_amp,
                 inference_batch_size=args.inference_batch_size,
@@ -1494,7 +1512,8 @@ def train(args):
                 no_legal_move_mode=args.no_legal_move_mode,
                 resolution_mode=args.resolution_mode,
                 dead_zone_activation_mode=args.dead_zone_activation_mode,
-                no_legal_move_rerolls=args.no_legal_move_rerolls
+                no_legal_move_rerolls=args.no_legal_move_rerolls,
+                komi=args.komi
             )
             all_data.extend(data)
             generated_games += batch_games
@@ -1553,7 +1572,8 @@ def train(args):
                 dead_zone_activation_mode=args.dead_zone_activation_mode,
                 no_legal_move_rerolls=args.no_legal_move_rerolls,
                 parallel_games=args.eval_parallel_games,
-                seed_base=args.eval_seed_base + iteration * 1000
+                seed_base=args.eval_seed_base + iteration * 1000,
+                komi=args.komi
             )
             head_to_head = None
             if best_model_state is not None and args.eval_headtohead_games > 0:
@@ -1580,7 +1600,8 @@ def train(args):
                     dead_zone_activation_mode=args.dead_zone_activation_mode,
                     no_legal_move_rerolls=args.no_legal_move_rerolls,
                     parallel_games=args.eval_parallel_games,
-                    seed_base=args.eval_seed_base + 500000 + iteration * 1000
+                    seed_base=args.eval_seed_base + 500000 + iteration * 1000,
+                    komi=args.komi
                 )
             t_eval = time.time() - t0 - t_selfplay - t_train
             print(f'  [Iter {iteration+1}] Eval: vs Heuristic AI winrate = {heuristic_eval["winrate"]:.1%} '
@@ -1667,6 +1688,7 @@ def eval_model(args):
           f'resolution_mode={args.resolution_mode} '
           f'dead_zone_activation_mode={args.dead_zone_activation_mode} '
           f'no_legal_move_rerolls={args.no_legal_move_rerolls} '
+          f'komi={args.komi} '
           f'eval_sims={args.eval_num_simulations} '
           f'eval_parallel={args.eval_parallel_games}')
 
@@ -1686,7 +1708,8 @@ def eval_model(args):
             resolution_mode=args.resolution_mode,
             dead_zone_activation_mode=args.dead_zone_activation_mode,
             no_legal_move_rerolls=args.no_legal_move_rerolls,
-            parallel_games=args.eval_parallel_games
+            parallel_games=args.eval_parallel_games,
+            komi=args.komi
         )
         print(f'  vs Heuristic Lv{level}: {result["winrate"]:.1%} '
               f'({result["wins_total"]}-{result["losses_total"]}-{result["draws"]}, '
@@ -1782,6 +1805,8 @@ def main():
                    help='死区转化生效时序: immediate 或 next_turn')
     p.add_argument('--no-legal-move-rerolls', type=parse_non_negative_int, default=1,
                    help='无合法着法时最多额外重抽几次，仅在 reroll_once_then_pass 模式下生效')
+    p.add_argument('--komi', type=float, default=0.0,
+                   help='贴目: 正值补偿后手(P2)，建议 0.5 的倍数以避免平局 (默认 0.0)')
     p.add_argument('--inference-batch-size', type=int, default=16,
                    help='MCTS 批量推理批大小，增大可提升 GPU 利用率')
     p.add_argument('--selfplay-parallel-games', type=int, default=4,
@@ -1790,6 +1815,10 @@ def main():
                    help='每轮固定训练步数，0 表示自动根据样本量决定')
     p.add_argument('--min-train-batches', type=int, default=4,
                    help='自动模式下每轮至少训练多少个 batch')
+    p.add_argument('--selfplay-temperature', type=float, default=1.0,
+                   help='自对弈前期走子温度，默认 1.0')
+    p.add_argument('--selfplay-temp-threshold', type=int, default=15,
+                   help='自对弈在第几步后切换到低温(0.1)，默认 15')
 
     # Benchmark
     p.add_argument('--benchmark-parallel-games', type=str, default='4,8,12',

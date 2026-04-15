@@ -138,6 +138,7 @@ def clone_into_reference(game: TetrisWeiqi) -> ReferenceTetrisWeiqi:
         resolution_mode=game.resolution_mode,
         dead_zone_activation_mode=game.dead_zone_activation_mode,
         no_legal_move_rerolls=game.no_legal_move_rerolls,
+        komi=game.komi,
     )
     ref.board = [row[:] for row in game.board]
     ref.current_player = game.current_player

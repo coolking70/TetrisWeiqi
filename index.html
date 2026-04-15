@@ -247,6 +247,9 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
       style="width:80px;vertical-align:middle;" oninput="updateMctsLabel()">
     <label id="mctsSimsLabel" style="font-size:12px;color:#aaa;">40次</label>
   </span>
+  <label>贴目</label>
+  <input type="number" id="komiInput" step="0.5" value="0" min="-20" max="20"
+    style="width:50px;" onchange="komi = parseFloat(this.value) || 0;">
   <button class="primary" onclick="startGame()">开始游戏</button>
   <button class="rotate-btn" onclick="rotatePiece()">旋转(R)</button>
   <button class="skip-btn" onclick="skipTurn()">跳过</button>
@@ -368,6 +371,7 @@ let gameMode = 'pvai';
 let ghostPos = null;
 let rotation = 0;
 let skipCount = 0;
+let komi = 0.0; // 贴目: 正值补偿后手(P2)
 let bag = []; // shared bag7
 let moveHistory = []; // 棋谱记录
 let lastPlacedMove = null; // { player, cells: [[r,c],...] } — 上一手落子位置
@@ -379,22 +383,20 @@ let boardCanvas, boardCtx, previewP1, prevCtx1, previewP2, prevCtx2;
 let animations = []; // { type, cells, color, startTime, duration }
 let animFrameId = null;
 
-// Audio system
-const SFX = {
-  place: null, capture: null, clear: null,
-  rotate: null, gameOver: null, gameStart: null,
-};
-let bgm = null;
+// Audio system — all sounds synthesized via Web Audio API (no external files)
 let soundEnabled = true;
 let bgmEnabled = true;
-
 let audioCtx = null;
+let bgmGain = null;    // master gain for BGM
+let bgmNodes = [];     // active BGM oscillator nodes
+let bgmInterval = null; // BGM scheduling interval
+
 function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
 
-// Procedural sound effects (no file needed)
+// --- Low-level tone helper ---
 function playTone(freq, duration, type, vol) {
   if (!soundEnabled) return;
   try {
@@ -412,53 +414,183 @@ function playTone(freq, duration, type, vol) {
   } catch (e) {}
 }
 
+// --- Synthesized SFX ---
+
+function playSfx(name) {
+  if (!soundEnabled) return;
+  try {
+    const ctx = getAudioCtx();
+    const t = ctx.currentTime;
+    switch (name) {
+      case 'place': {
+        // Solid thud: short low sine + click
+        const o1 = ctx.createOscillator(); const g1 = ctx.createGain();
+        o1.type = 'sine'; o1.frequency.value = 220;
+        g1.gain.setValueAtTime(0.4, t);
+        g1.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+        o1.connect(g1); g1.connect(ctx.destination);
+        o1.start(t); o1.stop(t + 0.12);
+        // Click overtone
+        const o2 = ctx.createOscillator(); const g2 = ctx.createGain();
+        o2.type = 'square'; o2.frequency.value = 800;
+        g2.gain.setValueAtTime(0.15, t);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+        o2.connect(g2); g2.connect(ctx.destination);
+        o2.start(t); o2.stop(t + 0.04);
+        break;
+      }
+      case 'capture': {
+        // Dramatic descending sweep + crunch
+        const o1 = ctx.createOscillator(); const g1 = ctx.createGain();
+        o1.type = 'sawtooth';
+        o1.frequency.setValueAtTime(600, t);
+        o1.frequency.exponentialRampToValueAtTime(120, t + 0.3);
+        g1.gain.setValueAtTime(0.25, t);
+        g1.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+        o1.connect(g1); g1.connect(ctx.destination);
+        o1.start(t); o1.stop(t + 0.35);
+        // Noise burst for crunch texture
+        const buf = ctx.createBuffer(1, ctx.sampleRate * 0.08, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.5;
+        const ns = ctx.createBufferSource(); ns.buffer = buf;
+        const ng = ctx.createGain();
+        ng.gain.setValueAtTime(0.2, t + 0.05);
+        ng.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+        ns.connect(ng); ng.connect(ctx.destination);
+        ns.start(t + 0.05); ns.stop(t + 0.15);
+        break;
+      }
+      case 'clear': {
+        // Bright ascending arpeggio (line clear celebration)
+        const notes = [523, 659, 784, 1047]; // C5 E5 G5 C6
+        notes.forEach((freq, i) => {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = freq;
+          const start = t + i * 0.06;
+          g.gain.setValueAtTime(0.3, start);
+          g.gain.exponentialRampToValueAtTime(0.001, start + 0.2);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(start); o.stop(start + 0.2);
+        });
+        break;
+      }
+      case 'rotate': {
+        // Quick pitch-up tick
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(400, t);
+        o.frequency.exponentialRampToValueAtTime(700, t + 0.06);
+        g.gain.setValueAtTime(0.2, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t); o.stop(t + 0.08);
+        break;
+      }
+      case 'gameOver': {
+        // Sad descending minor chord fade
+        const freqs = [392, 349, 311, 261]; // G4 F4 Eb4 C4
+        freqs.forEach((freq, i) => {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'triangle';
+          o.frequency.value = freq;
+          const start = t + i * 0.2;
+          g.gain.setValueAtTime(0.3, start);
+          g.gain.linearRampToValueAtTime(0.0, start + 0.6);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(start); o.stop(start + 0.6);
+        });
+        break;
+      }
+      case 'gameStart': {
+        // Bright fanfare: ascending major triad
+        const notes = [262, 330, 392, 523]; // C4 E4 G4 C5
+        notes.forEach((freq, i) => {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'square';
+          o.frequency.value = freq;
+          const start = t + i * 0.08;
+          g.gain.setValueAtTime(0.15, start);
+          g.gain.exponentialRampToValueAtTime(0.001, start + 0.25);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(start); o.stop(start + 0.25);
+        });
+        break;
+      }
+    }
+  } catch (e) {}
+}
+
 function playIllegalSfx() {
-  // Low buzzer: two quick dissonant tones
   playTone(150, 0.15, 'square', 0.2);
   setTimeout(() => playTone(120, 0.15, 'square', 0.15), 80);
 }
 
 function playSkipSfx() {
-  // Gentle descending two-note
   playTone(440, 0.15, 'sine', 0.25);
   setTimeout(() => playTone(330, 0.2, 'sine', 0.2), 100);
 }
 
-function initAudio() {
-  SFX.place     = new Audio('sounds/place.mp3');
-  SFX.capture   = new Audio('sounds/capture.mp3');
-  SFX.clear     = new Audio('sounds/clear.mp3');
-  SFX.rotate    = new Audio('sounds/rotate.mp3');
-  SFX.gameOver  = new Audio('sounds/gameover.mp3');
-  SFX.gameStart = new Audio('sounds/gamestart.mp3');
-  for (const k of Object.keys(SFX)) {
-    SFX[k].volume = 0.5;
-    SFX[k].preload = 'auto';
-  }
-  bgm = new Audio('sounds/bgm.mp3');
-  bgm.loop = true;
-  bgm.volume = 0.3;
-  bgm.preload = 'auto';
-}
-
-function playSfx(name) {
-  if (!soundEnabled || !SFX[name]) return;
+// --- Procedural BGM: ambient generative loop ---
+function playBgm() {
+  if (!bgmEnabled) return;
+  stopBgm();
   try {
-    const s = SFX[name];
-    s.currentTime = 0;
-    s.play().catch(() => {});
+    const ctx = getAudioCtx();
+    bgmGain = ctx.createGain();
+    bgmGain.gain.value = 0.08;
+    bgmGain.connect(ctx.destination);
+
+    // Pad drone: two detuned oscillators
+    const pad1 = ctx.createOscillator();
+    const pad2 = ctx.createOscillator();
+    pad1.type = 'sine'; pad1.frequency.value = 130.81; // C3
+    pad2.type = 'sine'; pad2.frequency.value = 196.00; // G3
+    const padGain = ctx.createGain(); padGain.gain.value = 0.6;
+    pad1.connect(padGain); pad2.connect(padGain);
+    padGain.connect(bgmGain);
+    pad1.start(); pad2.start();
+    bgmNodes.push(pad1, pad2);
+
+    // Subtle LFO tremolo on pad
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine'; lfo.frequency.value = 0.3;
+    const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.15;
+    lfo.connect(lfoGain);
+    lfoGain.connect(padGain.gain);
+    lfo.start();
+    bgmNodes.push(lfo);
+
+    // Generative melody: random pentatonic notes at intervals
+    const scale = [262, 294, 330, 392, 440, 523, 587, 659]; // C major pentatonic-ish
+    bgmInterval = setInterval(() => {
+      if (!bgmEnabled || !bgmGain) return;
+      try {
+        const ct = ctx.currentTime;
+        const freq = scale[Math.floor(Math.random() * scale.length)];
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = freq;
+        g.gain.setValueAtTime(0.15, ct);
+        g.gain.exponentialRampToValueAtTime(0.001, ct + 1.2);
+        o.connect(g); g.connect(bgmGain);
+        o.start(ct); o.stop(ct + 1.2);
+      } catch (e) {}
+    }, 2000 + Math.random() * 1500);
   } catch (e) {}
 }
 
-function playBgm() {
-  if (!bgmEnabled || !bgm) return;
-  bgm.play().catch(() => {});
+function stopBgm() {
+  try {
+    bgmNodes.forEach(n => { try { n.stop(); } catch(e) {} });
+    bgmNodes = [];
+    if (bgmInterval) { clearInterval(bgmInterval); bgmInterval = null; }
+    if (bgmGain) { bgmGain.disconnect(); bgmGain = null; }
+  } catch (e) {}
 }
 
-function stopBgm() {
-  if (!bgm) return;
-  bgm.pause();
-  bgm.currentTime = 0;
+function initAudio() {
+  // No external files to load — all sounds are synthesized via Web Audio API
 }
 
 function toggleSound() {
@@ -912,16 +1044,19 @@ function endGame() {
   stopBgm();
   playSfx('gameOver');
   const s1 = countPieces(P1), s2 = countPieces(P2);
+  // 贴目: komi 加到 P2 (后手) 的分数上
+  const eff1 = s1, eff2 = s2 + komi;
 
   let result;
-  if (s1 > s2) result = playerName(P1) + ' 获胜!';
-  else if (s2 > s1) result = playerName(P2) + ' 获胜!';
+  if (eff1 > eff2) result = playerName(P1) + ' 获胜!';
+  else if (eff2 > eff1) result = playerName(P2) + ' 获胜!';
   else result = '平局!';
 
   document.getElementById('gameOverTitle').textContent = '游戏结束';
   document.getElementById('gameOverResult').textContent = result;
+  const komiStr = komi !== 0 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
   document.getElementById('gameOverDetail').textContent =
-    `${playerName(P1)}: ${s1} 方块\n${playerName(P2)}: ${s2} 方块`;
+    `${playerName(P1)}: ${s1} 方块\n${playerName(P2)}: ${s2} 方块${komiStr}`;
   document.getElementById('gameOverOverlay').classList.add('show');
   updatePanels();
   render();
@@ -2126,6 +2261,7 @@ function playerName(p) {
 // ============================================================
 function exportGameRecord() {
   const s1 = countPieces(P1), s2 = countPieces(P2);
+  const eff1 = s1, eff2 = s2 + komi;
   const aiLevelNames = { 1: '简单', 2: '中等', 3: '困难', 4: '神经网络' };
   const aiLevel = parseInt(document.getElementById('aiLevelSelect').value);
 
@@ -2152,12 +2288,13 @@ function exportGameRecord() {
 
   // Result
   let winner;
-  if (s1 > s2) winner = '玩家1(蓝) 获胜';
-  else if (s2 > s1) winner = (gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)') + ' 获胜';
+  if (eff1 > eff2) winner = '玩家1(蓝) 获胜';
+  else if (eff2 > eff1) winner = (gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)') + ' 获胜';
   else winner = '平局';
   lines.push(`结果: ${winner}`);
   lines.push(`玩家1(蓝): ${s1} 方块`);
-  lines.push(`${gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)'}: ${s2} 方块`);
+  const komiNote = komi !== 0 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
+  lines.push(`${gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)'}: ${s2} 方块${komiNote}`);
   lines.push('');
 
   // Move table
@@ -2242,6 +2379,7 @@ function getGameState() {
     gameMode,
     gameActive,
     aiLevel: document.getElementById('aiLevelSelect').value,
+    komi: komi,
   };
 }
 
@@ -2262,6 +2400,8 @@ function restoreGameState(state) {
   ghostPos = null;
   setMode(gameMode);
   if (state.aiLevel) document.getElementById('aiLevelSelect').value = state.aiLevel;
+  komi = state.komi || 0;
+  document.getElementById('komiInput').value = komi;
   onAiLevelChange();
   updatePanels();
   render();

@@ -184,7 +184,8 @@ class TetrisWeiqi:
                  resolution_mode: str = 'capture_then_clear_recheck',
                  dead_zone_activation_mode: str = 'immediate',
                  no_legal_move_rerolls: int = 1,
-                 local_search: bool = True):
+                 local_search: bool = True,
+                 komi: float = 0.0):
         self.size = size
         self.dead_zone_fills_line = dead_zone_fills_line  # 死区是否参与消行判定
         self.score_dead_zone_weight = score_dead_zone_weight
@@ -197,6 +198,7 @@ class TetrisWeiqi:
         self.dead_zone_activation_mode = dead_zone_activation_mode
         self.no_legal_move_rerolls = no_legal_move_rerolls
         self.local_search = local_search
+        self.komi = komi  # 贴目: 正值补偿后手(P2)，建议 0.5 的倍数以避免平局
         self.rng = random.Random(seed)
         self._piece_bag = []
         self._player_piece_bags = {P1: [], P2: []}
@@ -649,6 +651,9 @@ class TetrisWeiqi:
         self.game_over = True
         s1 = self.terminal_tuple(P1)
         s2 = self.terminal_tuple(P2)
+        # 贴目: komi 加到 P2 (后手) 的第一分量上
+        if self.komi != 0.0:
+            s2 = (s2[0] + self.komi, s2[1])
         if s1 > s2:
             self.winner = P1
         elif s2 > s1:
@@ -1135,6 +1140,8 @@ def main():
                         help='死区转化生效时序: immediate 或 next_turn')
     parser.add_argument('--no-legal-move-rerolls', type=parse_non_negative_int, default=1,
                         help='无合法着法时最多额外重抽几次，仅在 reroll_once_then_pass 模式下生效')
+    parser.add_argument('--komi', type=float, default=0.0,
+                        help='贴目: 正值补偿后手(P2)，建议 0.5 的倍数以避免平局 (默认 0.0)')
     args = parser.parse_args()
 
     game = TetrisWeiqi(
@@ -1149,7 +1156,8 @@ def main():
         no_legal_move_mode=args.no_legal_move_mode,
         resolution_mode=args.resolution_mode,
         dead_zone_activation_mode=args.dead_zone_activation_mode,
-        no_legal_move_rerolls=args.no_legal_move_rerolls
+        no_legal_move_rerolls=args.no_legal_move_rerolls,
+        komi=args.komi
     )
 
     if args.mode == 'pvai':
