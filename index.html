@@ -116,6 +116,7 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
   justify-content: center;
   align-items: center;
   min-height: 80px;
+  margin-left: auto;
 }
 .preview-canvas { display: block; }
 
@@ -262,6 +263,12 @@ button.skip-btn { background: #4a1a1a; border-color: #c62828; }
       style="width:80px;vertical-align:middle;" oninput="updateMctsLabel()">
     <label id="mctsSimsLabel" style="font-size:12px;color:#aaa;">40次</label>
   </span>
+  <label>先手</label>
+  <select id="firstPlayerSelect">
+    <option value="random" selected>随机</option>
+    <option value="p1">玩家1</option>
+    <option value="p2">玩家2</option>
+  </select>
   <label>贴目</label>
   <input type="number" id="komiInput" step="0.5" value="0" min="-20" max="20"
     style="width:50px;" onchange="komi = parseFloat(this.value) || 0;">
@@ -617,12 +624,12 @@ function playBgm() {
     bgmGain.gain.value = 0.12;
     bgmGain.connect(ctx.destination);
 
-    // Korobeiniki melody in A minor (simplified, with variations)
-    // Each note: [frequency, duration_in_beats]
-    // 0 = rest
+    // Korobeiniki melody in A minor — extended arrangement with variations (~90s)
+    // Each note: [frequency, duration_in_beats], 0 = rest
     const BPM = 140;
     const beat = 60 / BPM;
     const melodyA = [
+      // === Section A: Original theme (A minor) ===
       // Phrase 1
       [659, 1], [494, 0.5], [523, 0.5], [587, 1], [523, 0.5], [494, 0.5],
       [440, 1], [440, 0.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
@@ -633,9 +640,60 @@ function playBgm() {
       [659, 1.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
       [494, 1], [494, 0.5], [523, 0.5], [587, 1], [659, 1],
       [523, 1], [440, 1], [440, 1], [0, 1],
+
+      // === Section B: Theme repeat with ornamentation ===
+      // Phrase 1 varied (added passing tones)
+      [659, 0.75], [622, 0.25], [494, 0.5], [523, 0.5], [587, 1], [523, 0.5], [494, 0.5],
+      [440, 0.75], [415, 0.25], [440, 0.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
+      [494, 1], [523, 0.5], [494, 0.5], [587, 1], [659, 1],
+      [523, 1], [440, 1], [440, 1], [0, 1],
+      // Phrase 2 with higher register variation
+      [0, 0.5], [587, 0.5], [659, 0.5], [698, 0.5], [880, 1], [784, 0.5], [698, 0.5],
+      [659, 1], [698, 0.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
+      [494, 0.75], [440, 0.25], [494, 0.5], [523, 0.5], [587, 1], [659, 1],
+      [523, 1], [440, 1], [440, 1], [0, 1],
+
+      // === Section C: Bridge / Development (C major feel) ===
+      [523, 1], [523, 0.5], [587, 0.5], [659, 1], [659, 0.5], [587, 0.5],
+      [523, 1], [440, 0.5], [494, 0.5], [523, 1.5], [0, 0.5],
+      [494, 1], [494, 0.5], [523, 0.5], [440, 1], [440, 0.5], [392, 0.5],
+      [440, 1], [494, 0.5], [523, 0.5], [587, 1.5], [0, 0.5],
+      // Bridge phrase 2 — rising tension
+      [659, 1], [698, 0.5], [784, 0.5], [880, 1], [784, 0.5], [698, 0.5],
+      [659, 1], [587, 0.5], [523, 0.5], [587, 1.5], [0, 0.5],
+      [659, 0.5], [698, 0.5], [784, 0.5], [880, 0.5], [1047, 1], [880, 0.5], [784, 0.5],
+      [659, 1], [587, 1], [523, 1], [0, 1],
+
+      // === Section D: Recapitulation with energy ===
+      // Theme returns, octave jump accents
+      [659, 0.5], [659, 0.5], [494, 0.5], [523, 0.5], [587, 1], [523, 0.5], [494, 0.5],
+      [440, 1], [440, 0.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
+      [494, 1], [494, 0.5], [523, 0.5], [587, 1], [659, 1],
+      [523, 1], [440, 0.5], [523, 0.5], [440, 1], [0, 1],
+      // Closing phrase — cadential
+      [0, 0.5], [587, 1], [698, 0.5], [880, 1], [784, 0.5], [698, 0.5],
+      [659, 1.5], [523, 0.5], [659, 1], [587, 0.5], [523, 0.5],
+      [494, 1], [494, 0.5], [523, 0.5], [587, 1], [659, 1],
+      [523, 0.5], [587, 0.5], [440, 1], [440, 2], [0, 1],
     ];
-    // Bass line (simplified root notes)
+    // Extended bass line
     const bassA = [
+      // Section A bass
+      [220, 2], [175, 2], [196, 2], [165, 2],
+      [175, 2], [196, 2], [220, 2], [220, 2],
+      [196, 2], [175, 2], [165, 2], [165, 2],
+      [175, 2], [196, 2], [220, 2], [220, 2],
+      // Section B bass (same pattern)
+      [220, 2], [175, 2], [196, 2], [165, 2],
+      [175, 2], [196, 2], [220, 2], [220, 2],
+      [196, 2], [175, 2], [165, 2], [165, 2],
+      [175, 2], [196, 2], [220, 2], [220, 2],
+      // Section C bass (C major / bridge)
+      [262, 2], [262, 2], [220, 2], [220, 2],
+      [247, 2], [220, 2], [196, 2], [196, 2],
+      [262, 2], [262, 2], [220, 2], [220, 2],
+      [262, 2], [247, 2], [262, 2], [262, 2],
+      // Section D bass (recap)
       [220, 2], [175, 2], [196, 2], [165, 2],
       [175, 2], [196, 2], [220, 2], [220, 2],
       [196, 2], [175, 2], [165, 2], [165, 2],
@@ -797,7 +855,11 @@ function startGame() {
   BOARD_SIZE = parseInt(document.getElementById('boardSizeSelect').value);
   resizeBoard();
   createBoard();
-  currentPlayer = P1;
+  // 先手选择
+  const firstSel = document.getElementById('firstPlayerSelect').value;
+  if (firstSel === 'p1') currentPlayer = P1;
+  else if (firstSel === 'p2') currentPlayer = P2;
+  else currentPlayer = Math.random() < 0.5 ? P1 : P2;
   rotation = 0;
   skipCount = 0;
   bag = [];
@@ -808,11 +870,16 @@ function startGame() {
   generatePiece(P1);
   generatePiece(P2);
   updatePanels();
-  setStatus(playerName(P1) + ' 的回合');
+  setStatus(playerName(currentPlayer) + ' 的回合');
   updateLegalMovesCache();
   render();
   playSfx('gameStart');
   playBgm();
+
+  // PvAI: 如果AI先手，触发AI落子
+  if (gameMode === 'pvai' && currentPlayer === P2) {
+    setTimeout(aiMove, 600);
+  }
 }
 
 // ============================================================
@@ -866,6 +933,11 @@ function updateLegalMovesCache() {
     }
   }
   cachedLegalMoves = { rotation, cells, moves };
+  // 当前旋转无合法落子时播放提示音效并刷新预览（红色）
+  if (moves.length === 0 && gameActive && !(gameMode === 'pvai' && currentPlayer === P2)) {
+    playIllegalSfx();
+    renderPreview(currentPlayer);
+  }
 }
 
 function getPieceBounds(cells) {
@@ -2348,11 +2420,13 @@ function renderPreview(player) {
   const cellSz = Math.min(20, Math.floor(72 / Math.max(bounds.rows, bounds.cols)));
   const offX = (90 - bounds.cols * cellSz) / 2;
   const offY = (90 - bounds.rows * cellSz) / 2;
-  const color = player === P1 ? P1_COLOR : P2_COLOR;
+  // 当前玩家当前旋转无合法落子时用红色提示
+  const noLegal = player === currentPlayer && gameActive && cachedLegalMoves && cachedLegalMoves.moves.length === 0;
+  const color = noLegal ? '#ff1744' : (player === P1 ? P1_COLOR : P2_COLOR);
   for (const [r, c] of cells) {
     ctx.fillStyle = color;
     ctx.fillRect(offX + c * cellSz + 1, offY + r * cellSz + 1, cellSz - 2, cellSz - 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillStyle = noLegal ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.15)';
     ctx.fillRect(offX + c * cellSz + 1, offY + r * cellSz + 1, cellSz - 2, 2);
   }
 }
