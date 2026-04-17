@@ -32,7 +32,8 @@ let gameMode = 'pvai';
 let ghostPos = null;
 let rotation = 0;
 let skipCount = 0;
-let komi = 0.0; // 贴目: 正值补偿后手(P2)
+let komi = 0.0; // 贴目: 正值补偿后手方
+let firstPlayer = P1;
 let bag = []; // shared bag7
 let moveHistory = []; // 棋谱记录
 let lastPlacedMove = null; // { player, cells: [[r,c],...] } — 上一手落子位置
@@ -310,6 +311,24 @@ function countPieces(player) {
   return n;
 }
 
+function getKomiReceiver() {
+  return firstPlayer === P1 ? P2 : P1;
+}
+
+function getEffectiveScores() {
+  const rawP1 = countPieces(P1);
+  const rawP2 = countPieces(P2);
+  let effP1 = rawP1;
+  let effP2 = rawP2;
+
+  if (komi !== 0) {
+    if (getKomiReceiver() === P1) effP1 += komi;
+    else effP2 += komi;
+  }
+
+  return { rawP1, rawP2, effP1, effP2 };
+}
+
 // ============================================================
 // Place & Turn
 // ============================================================
@@ -412,8 +431,8 @@ function skipTurn() {
 function endGame() {
   gameActive = false;
   stopBgm();
-  const s1 = countPieces(P1), s2 = countPieces(P2);
-  const eff1 = s1, eff2 = s2 + komi;
+  const { rawP1: s1, rawP2: s2, effP1: eff1, effP2: eff2 } = getEffectiveScores();
+  const komiReceiver = getKomiReceiver();
 
   let result;
   if (eff1 > eff2) {
@@ -429,9 +448,10 @@ function endGame() {
 
   document.getElementById('gameOverTitle').textContent = '游戏结束';
   document.getElementById('gameOverResult').textContent = result;
-  const komiStr = komi !== 0 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
+  const komiStrP1 = komi !== 0 && komiReceiver === P1 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
+  const komiStrP2 = komi !== 0 && komiReceiver === P2 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
   document.getElementById('gameOverDetail').textContent =
-    `${playerName(P1)}: ${s1} 方块\n${playerName(P2)}: ${s2} 方块${komiStr}`;
+    `${playerName(P1)}: ${s1} 方块${komiStrP1}\n${playerName(P2)}: ${s2} 方块${komiStrP2}`;
   document.getElementById('gameOverOverlay').classList.add('show');
   updatePanels();
   render();

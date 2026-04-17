@@ -410,8 +410,8 @@ function playerName(p) {
 // Game Record Export (棋谱导出)
 // ============================================================
 function exportGameRecord() {
-  const s1 = countPieces(P1), s2 = countPieces(P2);
-  const eff1 = s1, eff2 = s2 + komi;
+  const { rawP1: s1, rawP2: s2, effP1: eff1, effP2: eff2 } = getEffectiveScores();
+  const komiReceiver = getKomiReceiver();
   const aiLevelNames = { 1: '简单', 2: '中等', 3: '困难', 4: '神经网络' };
   const aiLevel = parseInt(document.getElementById('aiLevelSelect').value);
 
@@ -441,9 +441,10 @@ function exportGameRecord() {
   else if (eff2 > eff1) winner = (gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)') + ' 获胜';
   else winner = '平局';
   lines.push(`结果: ${winner}`);
-  lines.push(`玩家1(蓝): ${s1} 方块`);
-  const komiNote = komi !== 0 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
-  lines.push(`${gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)'}: ${s2} 方块${komiNote}`);
+  const komiNoteP1 = komi !== 0 && komiReceiver === P1 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
+  const komiNoteP2 = komi !== 0 && komiReceiver === P2 ? ` (贴目 ${komi > 0 ? '+' : ''}${komi})` : '';
+  lines.push(`玩家1(蓝): ${s1} 方块${komiNoteP1}`);
+  lines.push(`${gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)'}: ${s2} 方块${komiNoteP2}`);
   lines.push('');
 
   lines.push('──── 对局过程 ────');
@@ -521,6 +522,7 @@ function getGameState() {
               [P2]: pieces[P2] ? { name: pieces[P2].name } : null },
     bag: [...bag],
     skipCount,
+    firstPlayer,
     moveHistory: JSON.parse(JSON.stringify(moveHistory)),
     gameMode,
     gameActive,
@@ -557,6 +559,7 @@ function restoreGameState(state) {
   pieces[P2] = state.pieces[P2] ? { name: state.pieces[P2].name, cells: PIECE_SHAPES[state.pieces[P2].name].map(c => [...c]) } : null;
   bag = state.bag ? [...state.bag] : [];
   skipCount = state.skipCount || 0;
+  firstPlayer = state.firstPlayer || P1;
   moveHistory = state.moveHistory || [];
   gameMode = state.gameMode || 'pvai';
   gameActive = state.gameActive;

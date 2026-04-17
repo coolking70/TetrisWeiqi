@@ -67,6 +67,7 @@ function startGame() {
   if (firstSel === 'p1') currentPlayer = P1;
   else if (firstSel === 'p2') currentPlayer = P2;
   else currentPlayer = Math.random() < 0.5 ? P1 : P2;
+  firstPlayer = currentPlayer;
   rotation = 0;
   skipCount = 0;
   bag = [];
