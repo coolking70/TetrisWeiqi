@@ -8,3 +8,8 @@ Original prompt: 可以
 - Confirmed: forcing ONNX load failure now falls back to heuristic AI and still produces a legal AI move.
 - Confirmed: a controlled single auto-skip scenario now consumes exactly one replacement piece for the skipped player and leaves the next turn intact.
 - Note: the forced ONNX failure test intentionally emits one `console.error` line from `loadOnnxModel`; that is expected for this synthetic fallback check, not a regression in normal flow.
+- Follow-up regression pass after selective rollback/retention:
+- Confirmed: start/save/load still work after reverting high-risk logic optimizations.
+- Confirmed: countPieces-based score display matches direct board contents again after removing the cache approach.
+- Confirmed: forced ONNX failure still falls back to heuristic AI and produces a legal move.
+- Replay check remains conditional on having actual move history; a fresh start with no completed moves correctly reports no replayable game.

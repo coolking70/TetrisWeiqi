@@ -195,51 +195,29 @@ class PolicyValueNet(nn.Module):
 # State Encoding
 # ============================================================
 def encode_state(game: TetrisWeiqi, player: int) -> np.ndarray:
-    """
-    将游戏状态编码为神经网络输入张量 (22, size, size)
-
-    Channels 0-4: board one-hot (EMPTY, P1, P2, DEAD1, DEAD2)
-    Channels 5-11: current piece one-hot (I,O,T,S,Z,L,J) 全平面
-    Channels 12-18: bag 剩余方块计数（归一化到 [0,1]）
-    Channel 19: 当前发牌模式是否为 bag7
-    Channel 20: current player plane (全1=P1, 全0=P2)
-    Channel 21: opponent player plane (反过来)
-    """
     size = game.size
     state = np.zeros((INPUT_CHANNELS, size, size), dtype=np.float32)
 
-    # Board one-hot
-    for r in range(size):
-        for c in range(size):
-            cell = game.board[r][c]
-            # 从当前玩家视角编码：己方=P1通道，对方=P2通道
-            if cell == player:
-                state[1, r, c] = 1  # 己方
-            elif cell == (P2 if player == P1 else P1):
-                state[2, r, c] = 1  # 对方
-            elif cell == DEAD1:
-                state[3, r, c] = 1
-            elif cell == DEAD2:
-                state[4, r, c] = 1
-            else:
-                state[0, r, c] = 1  # EMPTY
+    board_arr = np.array(game.board, dtype=np.int32)
+    opponent = P2 if player == P1 else P1
 
-    # Piece one-hot (全平面)
+    state[0] = (board_arr == EMPTY).astype(np.float32)
+    state[1] = (board_arr == player).astype(np.float32)
+    state[2] = (board_arr == opponent).astype(np.float32)
+    state[3] = (board_arr == DEAD1).astype(np.float32)
+    state[4] = (board_arr == DEAD2).astype(np.float32)
+
     piece = game.pieces[player]
     if piece:
         idx = PIECE_NAMES.index(piece['name'])
         state[5 + idx, :, :] = 1
 
-    # Bag remaining counts. In bag7 mode these planes make the state Markov.
     bag_counts = game.bag_piece_counts(player)
     bag_norm = 7.0
     for idx, name in enumerate(PIECE_NAMES):
         state[12 + idx, :, :] = bag_counts[name] / bag_norm
 
-    # Distinguish bag-based distributions from uniform, since zero bag counts mean different things.
     state[19, :, :] = 1 if game.piece_distribution in ('bag7', 'bag7_independent') else 0
-
-    # Player indicator
     state[20, :, :] = 1 if player == P1 else 0
     state[21, :, :] = 0 if player == P1 else 1
 
@@ -790,10 +768,11 @@ class ReplayBuffer:
         self.buffer.extend(data_list)
 
     def sample(self, batch_size):
-        batch = random.sample(list(self.buffer), min(batch_size, len(self.buffer)))
-        states = np.array([b[0] for b in batch])
-        policies = np.array([b[1] for b in batch])
-        values = np.array([b[2] for b in batch], dtype=np.float32)
+        n = min(batch_size, len(self.buffer))
+        indices = random.sample(range(len(self.buffer)), n)
+        states = np.array([self.buffer[i][0] for i in indices])
+        policies = np.array([self.buffer[i][1] for i in indices])
+        values = np.array([self.buffer[i][2] for i in indices], dtype=np.float32)
         return states, policies, values
 
     def __len__(self):

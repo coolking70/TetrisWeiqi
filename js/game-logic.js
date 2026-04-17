@@ -136,8 +136,6 @@ function canPlace(cells, row, col, player) {
 }
 
 // 完整合法性检查：canPlace + 自杀禁手
-// 优化：避免 O(N²) 快照/恢复；吃子只检查新落子邻接处的对方棋组，
-// 自杀只检查含新落子的己方棋组。语义在合法局面下与完整扫描等价。
 function isLegalMove(cells, row, col, player) {
   if (!canPlace(cells, row, col, player)) return false;
 
@@ -184,10 +182,18 @@ function isLegalMove(cells, row, col, player) {
 }
 
 function canPlaceAnywhere(player, pieceCells) {
+  const seen = new Set();
   for (let rot = 0; rot < 4; rot++) {
     const cells = getRotatedCells(pieceCells, rot);
-    for (let r = 0; r < BOARD_SIZE; r++) {
-      for (let c = 0; c < BOARD_SIZE; c++) {
+    const key = cells.map(([r,c]) => `${r},${c}`).sort().join(';');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bounds = getPieceBounds(cells);
+    const maxR = BOARD_SIZE - bounds.rows + 1;
+    const maxC = BOARD_SIZE - bounds.cols + 1;
+    for (let r = 0; r < maxR; r++) {
+      for (let c = 0; c < maxC; c++) {
+        if (!canPlace(cells, r, c, player)) continue;
         if (isLegalMove(cells, r, c, player)) return true;
       }
     }
@@ -412,7 +418,7 @@ function endGame() {
   let result;
   if (eff1 > eff2) {
     result = playerName(P1) + ' 获胜!';
-    playSfx(gameMode === 'pvai' ? 'gameWin' : 'gameWin');
+    playSfx('gameWin');
   } else if (eff2 > eff1) {
     result = playerName(P2) + ' 获胜!';
     playSfx(gameMode === 'pvai' ? 'gameLose' : 'gameWin');

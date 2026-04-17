@@ -1,6 +1,14 @@
 // ============================================================
 // Input
 // ============================================================
+let renderPending = false;
+function requestRender() {
+  if (!renderPending) {
+    renderPending = true;
+    requestAnimationFrame(() => { renderPending = false; render(); });
+  }
+}
+
 function onMouseMove(e) {
   if (!gameActive || (gameMode === 'pvai' && currentPlayer === P2)) return;
   const rect = boardCanvas.getBoundingClientRect();
@@ -9,7 +17,7 @@ function onMouseMove(e) {
   const cells = getCurrentCells();
   const bounds = getPieceBounds(cells);
   ghostPos = { row: row - Math.floor(bounds.rows / 2), col: col - Math.floor(bounds.cols / 2) };
-  render();
+  requestRender();
 }
 
 function onBoardClick(e) {
@@ -72,7 +80,7 @@ function onTouchStart(e) {
   const pos = getTouchBoardPos(e.touches[0]);
   ghostPos = pos;
   touchStartPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-  render();
+  requestRender();
 }
 
 function onTouchMove(e) {
@@ -81,7 +89,7 @@ function onTouchMove(e) {
   if (e.touches.length !== 1) return;
   touchMoved = true;
   ghostPos = getTouchBoardPos(e.touches[0]);
-  render();
+  requestRender();
 }
 
 function onTouchEnd(e) {

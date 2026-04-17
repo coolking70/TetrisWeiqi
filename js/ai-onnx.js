@@ -17,16 +17,74 @@ function aiMove() {
   heuristicAiMove(aiLevel);
 }
 
+function executeAiMove(move, label) {
+  rotation = move.rot;
+  const placedCells = move.cells.map(([dr, dc]) => [move.row + dr, move.col + dc]);
+  const result = placePiece(move.cells, move.row, move.col, P2);
+  skipCount = 0;
+  lastPlacedMove = { player: P2, cells: placedCells };
+  moveHistory.push({
+    turn: moveHistory.length + 1,
+    player: P2,
+    piece: pieces[P2].name,
+    rotation: move.rot,
+    row: move.row,
+    col: move.col,
+    captured: result.captured,
+    linesCleared: result.linesCleared,
+    type: 'place'
+  });
+
+  let msg = `AI${label ? '(' + label + ')' : ''} 落子`;
+  if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
+  if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
+  setStatus(msg);
+
+  playSfx('place');
+  let delay = 350;
+  if (result.captured > 0) {
+    setTimeout(() => playSfx('capture'), 100);
+    delay = 600;
+  }
+  if (result.linesCleared > 0) {
+    setTimeout(() => playSfx('clear'), result.captured > 0 ? 550 : 150);
+    delay = Math.max(delay, result.captured > 0 ? 1000 : 600);
+  }
+
+  generatePiece(P2);
+  updatePanels();
+  render();
+  setTimeout(() => nextTurn(), delay);
+}
+
+function aiSkipMove(label) {
+  skipCount++;
+  if (label === 'MCTS') {
+    moveHistory.push({ turn: moveHistory.length + 1, player: P2, type: 'auto_skip' });
+  }
+  generatePiece(P2);
+  if (skipCount >= 2) { endGame(); return; }
+  nextTurn();
+}
+
 function heuristicAiMove(aiLevel) {
   const piece = pieces[P2];
   let bestScore = -Infinity;
   let bestMoves = [];
 
+  const seen = new Set();
   for (let rot = 0; rot < 4; rot++) {
     const cells = getRotatedCells(piece.cells, rot);
-    for (let r = 0; r < BOARD_SIZE; r++) {
-      for (let c = 0; c < BOARD_SIZE; c++) {
+    const key = cells.map(([r,c]) => `${r},${c}`).sort().join(';');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bounds = getPieceBounds(cells);
+    const maxR = BOARD_SIZE - bounds.rows + 1;
+    const maxC = BOARD_SIZE - bounds.cols + 1;
+    for (let r = 0; r < maxR; r++) {
+      for (let c = 0; c < maxC; c++) {
         if (!isLegalMove(cells, r, c, P2)) continue;
+
         const boardCopy = board.map(row => [...row]);
         for (const [dr, dc] of cells) board[r + dr][c + dc] = P2;
         const captured = checkCaptures(P2);
@@ -50,52 +108,12 @@ function heuristicAiMove(aiLevel) {
   }
 
   if (bestMoves.length === 0) {
-    skipCount++;
-    generatePiece(P2);
-    if (skipCount >= 2) { endGame(); return; }
-    nextTurn();
+    aiSkipMove();
     return;
   }
 
   const move = bestMoves[Math.floor(Math.random() * bestMoves.length)];
-  rotation = move.rot;
-  const aiPieceName = pieces[P2].name;
-  const aiPlacedCells = move.cells.map(([dr, dc]) => [move.row + dr, move.col + dc]);
-  const result = placePiece(move.cells, move.row, move.col, P2);
-  skipCount = 0;
-  lastPlacedMove = { player: P2, cells: aiPlacedCells };
-  moveHistory.push({
-    turn: moveHistory.length + 1,
-    player: P2,
-    piece: aiPieceName,
-    rotation: move.rot,
-    row: move.row,
-    col: move.col,
-    captured: result.captured,
-    linesCleared: result.linesCleared,
-    type: 'place'
-  });
-
-  let msg = 'AI 落子';
-  if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
-  if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
-  setStatus(msg);
-
-  playSfx('place');
-  let aiDelay = 350;
-  if (result.captured > 0) {
-    setTimeout(() => playSfx('capture'), 100);
-    aiDelay = 600;
-  }
-  if (result.linesCleared > 0) {
-    setTimeout(() => playSfx('clear'), result.captured > 0 ? 550 : 150);
-    aiDelay = Math.max(aiDelay, result.captured > 0 ? 1000 : 600);
-  }
-
-  generatePiece(P2);
-  updatePanels();
-  render();
-  setTimeout(() => nextTurn(), aiDelay);
+  executeAiMove(move, '');
 }
 
 function evaluateAI(row, col, cells, captured, linesCleared, level) {
@@ -188,40 +206,37 @@ async function loadOnnxModel() {
 
 function encodeState(player) {
   const S = BOARD_SIZE;
-  const data = new Float32Array(INPUT_CHANNELS * S * S);
+  const SS = S * S;
+  const data = new Float32Array(INPUT_CHANNELS * SS);
   const opponent = player === P1 ? P2 : P1;
 
   for (let r = 0; r < S; r++) {
     for (let c = 0; c < S; c++) {
       const cell = board[r][c];
       const offset = r * S + c;
-      if (cell === EMPTY)    data[0 * S * S + offset] = 1;
-      else if (cell === player)   data[1 * S * S + offset] = 1;
-      else if (cell === opponent) data[2 * S * S + offset] = 1;
+      if (cell === EMPTY)    data[offset] = 1;
+      else if (cell === player)   data[SS + offset] = 1;
+      else if (cell === opponent) data[2 * SS + offset] = 1;
     }
   }
 
   const piece = pieces[player];
   if (piece) {
     const pidx = PIECE_NAMES.indexOf(piece.name);
-    const ch = 5 + pidx;
-    for (let i = 0; i < S * S; i++) data[ch * S * S + i] = 1;
+    data.subarray((5 + pidx) * SS, (5 + pidx + 1) * SS).fill(1);
   }
 
   const bagCounts = bagPieceCounts();
   for (let i = 0; i < PIECE_NAMES.length; i++) {
     const val = bagCounts[PIECE_NAMES[i]] / 7.0;
-    const ch = 12 + i;
-    for (let j = 0; j < S * S; j++) data[ch * S * S + j] = val;
+    data.subarray((12 + i) * SS, (12 + i + 1) * SS).fill(val);
   }
 
-  for (let i = 0; i < S * S; i++) data[19 * S * S + i] = 1;
+  data.subarray(19 * SS, 20 * SS).fill(1);
 
   const isP1 = player === P1 ? 1 : 0;
-  for (let i = 0; i < S * S; i++) {
-    data[20 * S * S + i] = isP1;
-    data[21 * S * S + i] = 1 - isP1;
-  }
+  data.subarray(20 * SS, 21 * SS).fill(isP1);
+  data.subarray(21 * SS, 22 * SS).fill(1 - isP1);
 
   return data;
 }
@@ -239,10 +254,17 @@ async function neuralNetworkMove() {
 
   const piece = pieces[P2];
   let candidates = [];
+  const seen = new Set();
   for (let rot = 0; rot < 4; rot++) {
     const cells = getRotatedCells(piece.cells, rot);
-    for (let r = 0; r < S; r++) {
-      for (let c = 0; c < S; c++) {
+    const key = cells.map(([r,c]) => `${r},${c}`).sort().join(';');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bounds = getPieceBounds(cells);
+    const maxR = S - bounds.rows + 1;
+    const maxC = S - bounds.cols + 1;
+    for (let r = 0; r < maxR; r++) {
+      for (let c = 0; c < maxC; c++) {
         if (!isLegalMove(cells, r, c, P2)) continue;
         const actionIdx = rot * S * S + r * S + c;
         candidates.push({ rot, row: r, col: c, cells, score: policyLogits[actionIdx] });
@@ -251,10 +273,7 @@ async function neuralNetworkMove() {
   }
 
   if (candidates.length === 0) {
-    skipCount++;
-    generatePiece(P2);
-    if (skipCount >= 2) { endGame(); return; }
-    nextTurn();
+    aiSkipMove('神经网络');
     return;
   }
 
@@ -274,44 +293,7 @@ async function neuralNetworkMove() {
     if (rand <= 0) { move = c; break; }
   }
 
-  rotation = move.rot;
-  const nnPieceName = pieces[P2].name;
-  const nnPlacedCells = move.cells.map(([dr, dc]) => [move.row + dr, move.col + dc]);
-  const result = placePiece(move.cells, move.row, move.col, P2);
-  skipCount = 0;
-  lastPlacedMove = { player: P2, cells: nnPlacedCells };
-  moveHistory.push({
-    turn: moveHistory.length + 1,
-    player: P2,
-    piece: nnPieceName,
-    rotation: move.rot,
-    row: move.row,
-    col: move.col,
-    captured: result.captured,
-    linesCleared: result.linesCleared,
-    type: 'place'
-  });
-
-  let msg = 'AI(神经网络) 落子';
-  if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
-  if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
-  setStatus(msg);
-
-  playSfx('place');
-  let nnDelay = 350;
-  if (result.captured > 0) {
-    setTimeout(() => playSfx('capture'), 100);
-    nnDelay = 600;
-  }
-  if (result.linesCleared > 0) {
-    setTimeout(() => playSfx('clear'), result.captured > 0 ? 550 : 150);
-    nnDelay = Math.max(nnDelay, result.captured > 0 ? 1000 : 600);
-  }
-
-  generatePiece(P2);
-  updatePanels();
-  render();
-  setTimeout(() => nextTurn(), nnDelay);
+  executeAiMove(move, '神经网络');
 }
 
 // ============================================================
@@ -536,35 +518,34 @@ class SimGame {
 
   encodeState(player) {
     const S = this.size;
-    const data = new Float32Array(INPUT_CHANNELS * S * S);
+    const SS = S * S;
+    const data = new Float32Array(INPUT_CHANNELS * SS);
     const opponent = player === P1 ? P2 : P1;
     for (let r = 0; r < S; r++) {
       for (let c = 0; c < S; c++) {
         const cell = this.board[r][c];
         const offset = r * S + c;
-        if (cell === EMPTY)         data[0 * S * S + offset] = 1;
-        else if (cell === player)   data[1 * S * S + offset] = 1;
-        else if (cell === opponent) data[2 * S * S + offset] = 1;
+        if (cell === EMPTY)         data[offset] = 1;
+        else if (cell === player)   data[SS + offset] = 1;
+        else if (cell === opponent) data[2 * SS + offset] = 1;
       }
     }
     const piece = this.pieces[player];
     if (piece) {
       const pidx = PIECE_NAMES.indexOf(piece.name);
-      for (let i = 0; i < S * S; i++) data[(5 + pidx) * S * S + i] = 1;
+      data.subarray((5 + pidx) * SS, (5 + pidx + 1) * SS).fill(1);
     }
     const bagCounts = {};
     for (const n of PIECE_NAMES) bagCounts[n] = 0;
     for (const n of this.bag) bagCounts[n]++;
     for (let i = 0; i < PIECE_NAMES.length; i++) {
       const val = bagCounts[PIECE_NAMES[i]] / 7.0;
-      for (let j = 0; j < S * S; j++) data[(12 + i) * S * S + j] = val;
+      data.subarray((12 + i) * SS, (12 + i + 1) * SS).fill(val);
     }
-    for (let i = 0; i < S * S; i++) data[19 * S * S + i] = 1;
+    data.subarray(19 * SS, 20 * SS).fill(1);
     const isP1 = player === P1 ? 1 : 0;
-    for (let i = 0; i < S * S; i++) {
-      data[20 * S * S + i] = isP1;
-      data[21 * S * S + i] = 1 - isP1;
-    }
+    data.subarray(20 * SS, 21 * SS).fill(isP1);
+    data.subarray(21 * SS, 22 * SS).fill(1 - isP1);
     return data;
   }
 
@@ -701,50 +682,9 @@ async function mctsMove() {
   const bestMove = await mctsSearch(session, rootGame, P2);
 
   if (!bestMove) {
-    skipCount++;
-    moveHistory.push({ turn: moveHistory.length + 1, player: P2, type: 'auto_skip' });
-    generatePiece(P2);
-    if (skipCount >= 2) { endGame(); return; }
-    nextTurn();
+    aiSkipMove('MCTS');
     return;
   }
 
-  rotation = bestMove.rot;
-  const mctsPieceName = pieces[P2].name;
-  const mctsPlacedCells = bestMove.cells.map(([dr, dc]) => [bestMove.row + dr, bestMove.col + dc]);
-  const result = placePiece(bestMove.cells, bestMove.row, bestMove.col, P2);
-  skipCount = 0;
-  lastPlacedMove = { player: P2, cells: mctsPlacedCells };
-  moveHistory.push({
-    turn: moveHistory.length + 1,
-    player: P2,
-    piece: mctsPieceName,
-    rotation: bestMove.rot,
-    row: bestMove.row,
-    col: bestMove.col,
-    captured: result.captured,
-    linesCleared: result.linesCleared,
-    type: 'place'
-  });
-
-  let msg = 'AI(MCTS) 落子';
-  if (result.captured > 0) msg += ` | 围杀 ${result.captured} 子`;
-  if (result.linesCleared > 0) msg += ` | 消除 ${result.linesCleared} 行/列`;
-  setStatus(msg);
-
-  playSfx('place');
-  let mctsDelay = 350;
-  if (result.captured > 0) {
-    setTimeout(() => playSfx('capture'), 100);
-    mctsDelay = 600;
-  }
-  if (result.linesCleared > 0) {
-    setTimeout(() => playSfx('clear'), result.captured > 0 ? 550 : 150);
-    mctsDelay = Math.max(mctsDelay, result.captured > 0 ? 1000 : 600);
-  }
-
-  generatePiece(P2);
-  updatePanels();
-  render();
-  setTimeout(() => nextTurn(), mctsDelay);
+  executeAiMove(bestMove, 'MCTS');
 }
