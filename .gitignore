@@ -17,3 +17,6 @@ checkpoints*/
 # Generated analysis and benchmark artifacts
 cli/*.json
 !cli/benchmark_mainline_c_v2.json
+
+# Local backups
+*.bak
