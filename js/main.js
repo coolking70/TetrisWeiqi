@@ -48,8 +48,11 @@ function setMode(mode) {
   gameMode = mode;
   document.getElementById('btnPvAI').classList.toggle('selected', mode === 'pvai');
   document.getElementById('btnPvP').classList.toggle('selected', mode === 'pvp');
-  document.getElementById('panelP2').querySelector('h2').textContent =
-    mode === 'pvai' ? 'AI (紫)' : '玩家 2 (紫)';
+  const p2 = document.getElementById('panelP2');
+  const nameEl = p2 && p2.querySelector('.who-name');
+  if (nameEl) nameEl.textContent = mode === 'pvai' ? 'AI' : '玩家二';
+  const avatarEl = p2 && p2.querySelector('.avatar');
+  if (avatarEl) avatarEl.textContent = mode === 'pvai' ? 'AI' : 'P2';
 }
 
 function changeBoardSize() {

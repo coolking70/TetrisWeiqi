@@ -402,8 +402,8 @@ function setStatus(msg) {
 }
 
 function playerName(p) {
-  if (p === P1) return '玩家1(蓝)';
-  return gameMode === 'pvai' ? 'AI(紫)' : '玩家2(紫)';
+  if (p === P1) return '玩家1(青)';
+  return gameMode === 'pvai' ? 'AI(金)' : '玩家2(金)';
 }
 
 // ============================================================

@@ -3,93 +3,220 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>俄罗斯方块棋 Tetris Weiqi</title>
+<title>方块棋 · Block Chess</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;600;700&family=Share+Tech+Mono&family=Noto+Sans+SC:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.min.js"></script>
 </head>
 <body>
 
-<div class="header">
-  <h1>俄罗斯方块棋</h1>
-  <div class="subtitle">Tetris meets Weiqi</div>
-</div>
-
-<div class="top-bar">
-  <button class="mode-btn selected" id="btnPvAI" onclick="setMode('pvai')">人机</button>
-  <button class="mode-btn" id="btnPvP" onclick="setMode('pvp')">双人</button>
-  <label>棋盘</label>
-  <select id="boardSizeSelect" onchange="changeBoardSize()">
-    <option value="10" selected>10x10</option>
-    <option value="13">13x13</option>
-    <option value="15">15x15</option>
-  </select>
-  <label>AI</label>
-  <select id="aiLevelSelect">
-    <option value="1">简单</option>
-    <option value="2" selected>普通</option>
-    <option value="3">困难</option>
-    <option value="4">神经网络</option>
-    <option value="5">神经网络+MCTS</option>
-  </select>
-  <span id="mctsSliderWrap" style="display:none;">
-    <input type="range" id="mctsSimsSlider" min="10" max="200" step="10" value="40"
-      style="width:80px;vertical-align:middle;" oninput="updateMctsLabel()">
-    <label id="mctsSimsLabel" style="font-size:12px;color:#aaa;">40次</label>
-  </span>
-  <label>先手</label>
-  <select id="firstPlayerSelect">
-    <option value="random" selected>随机</option>
-    <option value="p1">玩家1</option>
-    <option value="p2">玩家2</option>
-  </select>
-  <label>贴目</label>
-  <input type="number" id="komiInput" step="0.5" value="0" min="-20" max="20"
-    style="width:50px;" onchange="komi = parseFloat(this.value) || 0;">
-  <button class="primary" onclick="startGame()">开始游戏</button>
-  <button class="rotate-btn" onclick="rotatePiece()">旋转(R)</button>
-  <button class="skip-btn" onclick="skipTurn()">跳过</button>
-  <button onclick="saveGame()" style="background:#1a3a1a;border:1px solid #4caf50;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;">存档</button>
-  <button onclick="loadGame()" style="background:#1a2a3a;border:1px solid #42a5f5;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;">读档</button>
-  <button onclick="document.getElementById('replayFileInput').click()" style="background:#2d1b4e;border:1px solid #7c4dff;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;">回放棋谱</button>
-  <input type="file" id="replayFileInput" accept=".txt" style="display:none;" onchange="loadReplayFile(event)">
-  <button id="btnSound" onclick="toggleSound()" style="background:#1a1a2e;border:1px solid #555;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:16px;">🔊</button>
-  <button id="btnBgm" onclick="toggleBgm()" style="background:#1a1a2e;border:1px solid #555;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:16px;">🎵</button>
-</div>
-
-<div class="status-bar" id="statusBar">点击"开始游戏"开始</div>
-
-<div class="game-area">
-  <div class="panel p1" id="panelP1">
-    <h2>玩家 1 (蓝)</h2>
-    <div class="score-row">
-      <span class="score-label">方块数</span>
-      <span class="score-value" id="scoreP1">0</span>
+<!-- ============================================================
+     SCREEN 1 — MAIN MENU
+     ============================================================ -->
+<section id="mainMenuScreen" class="screen active">
+  <div class="menu-bg">
+    <div class="half cyber-half"></div>
+    <div class="divider"></div>
+    <div class="half xian-half">
+      <div class="orbit r1"></div><div class="orbit r2"></div>
+      <div class="orbit r3"></div><div class="orbit r4"></div>
     </div>
-    <div class="score-label">当前方块</div>
-    <div class="preview-box"><canvas class="preview-canvas" id="previewP1" width="90" height="90"></canvas></div>
   </div>
+  <div class="grid-bg"></div>
+  <div class="scanlines"></div>
 
-  <div class="board-wrapper">
-    <canvas id="boardCanvas"></canvas>
-  </div>
-
-  <div class="panel p2" id="panelP2">
-    <h2>玩家 2 (紫)</h2>
-    <div class="score-row">
-      <span class="score-label">方块数</span>
-      <span class="score-value" id="scoreP2">0</span>
+  <div class="menu-factions">
+    <div class="label-c">
+      <div class="en">CYBER ORDER</div>
+      <div class="zh">赛博秩序</div>
     </div>
-    <div class="score-label">当前方块</div>
-    <div class="preview-box"><canvas class="preview-canvas" id="previewP2" width="90" height="90"></canvas></div>
+    <div class="label-x">
+      <div class="zh">末法时代</div>
+      <div class="en">WANING AGE</div>
+    </div>
   </div>
-</div>
 
-<div class="footer">
-  <div class="legend-item"><div class="legend-swatch" style="background:#4fc3f7"></div> 玩家1</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#e040fb"></div> 玩家2</div>
-  <span class="desktop-hint">鼠标预览 | 点击落子 | R/右键旋转 | 方向键微调</span>
-  <span class="mobile-hint">触屏拖动预览 | 松手落子 | 点击方块预览旋转</span>
-</div>
+  <div class="menu-content">
+    <div class="menu-title fade-in">
+      <div class="ch"><span class="a">方</span><span class="b">块</span><span class="b">棋</span></div>
+      <div class="en">BLOCK&nbsp;&nbsp;CHESS</div>
+      <div class="subtitle">
+        <div class="line-c"></div>
+        <div class="txt"><span class="c-hint">整理现实</span> · <span class="x-hint">争夺现实</span></div>
+        <div class="line-x"></div>
+      </div>
+    </div>
+
+    <div class="menu-modes fade-in-delay">
+      <button class="mode-tile cyber" onclick="enterGame()">
+        <div class="icon">◈</div>
+        <div class="zh">对战模式</div>
+        <div class="en">VERSUS</div>
+        <div class="desc">PvP · PvAI · 10/13/15 路棋盘</div>
+      </button>
+      <button class="mode-tile both coming-soon" title="敬请期待">
+        <div class="icon">◉</div>
+        <div class="zh">剧情模式</div>
+        <div class="en">STORY</div>
+        <div class="desc">敬请期待</div>
+      </button>
+      <button class="mode-tile xian coming-soon" title="敬请期待">
+        <div class="icon">◬</div>
+        <div class="zh xian">技能体系</div>
+        <div class="en">SKILLS</div>
+        <div class="desc">敬请期待</div>
+      </button>
+    </div>
+  </div>
+
+  <div class="menu-footer">
+    <span>BLOCK CHESS PROJECT</span>
+    <span>v0.2 · VERTICAL SLICE</span>
+    <span>TETRIS · WEIQI</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SCREEN 2 — VERSUS (gameplay)
+     ============================================================ -->
+<section id="gameScreen" class="screen">
+  <div class="grid-bg"></div>
+  <div class="scanlines"></div>
+
+  <!-- Top bar -->
+  <div class="gs-topbar">
+    <div class="left">
+      <button class="btn-ghost" onclick="backToMenu()">← 主菜单</button>
+    </div>
+    <div class="center">
+      <div class="gs-meta" id="roundMeta">未开始</div>
+      <div class="gs-turn idle" id="turnBadge">等待开始</div>
+      <div class="gs-meta" id="boardMeta">10 × 10</div>
+    </div>
+    <div class="right">
+      <button class="icon-btn" id="btnSound" onclick="toggleSound()" title="音效">🔊</button>
+      <button class="icon-btn" id="btnBgm"   onclick="toggleBgm()"   title="背景音乐">🎵</button>
+      <button class="btn-ghost" onclick="saveGame()">存档</button>
+      <button class="btn-ghost" onclick="loadGame()">读档</button>
+      <button class="btn-ghost" onclick="document.getElementById('replayFileInput').click()">回放棋谱</button>
+      <input type="file" id="replayFileInput" accept=".txt" style="display:none;" onchange="loadReplayFile(event)">
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="gs-status" id="statusBar">点击"开始游戏"开始</div>
+
+  <!-- Main game area -->
+  <div class="gs-main">
+
+    <!-- Left: Cyber player (P1) -->
+    <div class="panel p1" id="panelP1">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="avatar-row">
+        <div class="avatar">P1</div>
+        <div style="flex:1;">
+          <div class="who-name">玩家一</div>
+          <div class="who-tag">CYBER · 赛博方</div>
+        </div>
+        <div class="turn-dot"></div>
+      </div>
+      <h2>方块在场</h2>
+      <div class="score-row">
+        <div class="score-label">BLOCKS ON BOARD</div>
+        <span class="score-value" id="scoreP1">0</span>
+      </div>
+      <div class="preview-label">NEXT PIECE</div>
+      <div class="preview-box"><canvas class="preview-canvas" id="previewP1" width="90" height="90"></canvas></div>
+    </div>
+
+    <!-- Center: board + actions -->
+    <div class="board-wrapper">
+      <div class="board-frame">
+        <span class="corner-tr"></span>
+        <span class="corner-bl"></span>
+        <canvas id="boardCanvas"></canvas>
+      </div>
+      <div class="board-actions">
+        <button class="action-btn" onclick="rotatePiece()">
+          <span class="label">旋转</span><span class="tag">[ R ]</span>
+        </button>
+        <button class="action-btn primary" onclick="startGame()">
+          <span class="label">开始游戏</span><span class="tag">[ START ]</span>
+        </button>
+        <button class="action-btn" onclick="skipTurn()">
+          <span class="label">跳过回合</span><span class="tag">[ PASS ]</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Right: Xian player (P2) -->
+    <div class="panel p2" id="panelP2">
+      <span class="dot tl"></span><span class="dot tr"></span>
+      <span class="dot bl"></span><span class="dot br"></span>
+      <div class="avatar-row" style="flex-direction:row-reverse;">
+        <div class="avatar">P2</div>
+        <div style="flex:1; text-align:right;">
+          <div class="who-name">玩家二</div>
+          <div class="who-tag">末法 · 修仙方</div>
+        </div>
+        <div class="turn-dot"></div>
+      </div>
+      <h2 style="text-align:right;">棋面方块</h2>
+      <div class="score-row" style="text-align:right;">
+        <div class="score-label">棋面方块</div>
+        <span class="score-value" id="scoreP2">0</span>
+      </div>
+      <div class="preview-label" style="text-align:right;">下一手</div>
+      <div class="preview-box"><canvas class="preview-canvas" id="previewP2" width="90" height="90"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Settings row -->
+  <div class="gs-settings">
+    <div class="mode-toggle">
+      <button class="selected" id="btnPvAI" onclick="setMode('pvai')">人机</button>
+      <button id="btnPvP" onclick="setMode('pvp')">双人</button>
+    </div>
+    <label>棋盘</label>
+    <select id="boardSizeSelect" onchange="changeBoardSize()">
+      <option value="10" selected>10x10</option>
+      <option value="13">13x13</option>
+      <option value="15">15x15</option>
+    </select>
+    <label>AI</label>
+    <select id="aiLevelSelect">
+      <option value="1">简单</option>
+      <option value="2" selected>普通</option>
+      <option value="3">困难</option>
+      <option value="4">神经网络</option>
+      <option value="5">NN + MCTS</option>
+    </select>
+    <span id="mctsSliderWrap" style="display:none;">
+      <input type="range" id="mctsSimsSlider" min="10" max="200" step="10" value="40"
+             style="width:80px;" oninput="updateMctsLabel()">
+      <span id="mctsSimsLabel">40次</span>
+    </span>
+    <label>先手</label>
+    <select id="firstPlayerSelect">
+      <option value="random" selected>随机</option>
+      <option value="p1">玩家1</option>
+      <option value="p2">玩家2</option>
+    </select>
+    <label>贴目</label>
+    <input type="number" id="komiInput" step="0.5" value="0" min="-20" max="20"
+           onchange="komi = parseFloat(this.value) || 0;">
+    <button class="btn-primary" onclick="startGame()">开始游戏</button>
+  </div>
+
+  <!-- Footer -->
+  <div class="gs-footer">
+    <div class="legend-item"><div class="legend-swatch" style="background:#00e5ff; box-shadow:0 0 6px rgba(0,229,255,.6);"></div> 玩家1 · 青</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#c8973a; box-shadow:0 0 6px rgba(200,151,58,.6);"></div> 玩家2 · 金</div>
+    <span class="desktop-hint">鼠标预览 · 点击落子 · R / 右键旋转 · 方向键微调</span>
+    <span class="mobile-hint">触屏拖动预览 · 松手落子 · 点击方块预览旋转</span>
+  </div>
+</section>
 
 <!-- Mobile touch controls -->
 <div class="mobile-controls" id="mobileControls">
@@ -106,29 +233,30 @@
   </div>
 </div>
 
+<!-- Game over dialog -->
 <div class="overlay" id="gameOverOverlay">
   <div class="dialog">
-    <h2 id="gameOverTitle">游戏结束</h2>
+    <h2 id="gameOverTitle">对局结束</h2>
     <div class="result" id="gameOverResult"></div>
     <div class="detail" id="gameOverDetail"></div>
-    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-      <button class="primary" onclick="exportGameRecord()">导出棋谱</button>
-      <button class="primary" onclick="closeOverlay(); startReplay();">回放</button>
-      <button class="primary" onclick="closeOverlay(); startGame();">再来一局</button>
+    <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+      <button class="btn-primary" onclick="exportGameRecord()">导出棋谱</button>
+      <button class="btn-primary" onclick="closeOverlay(); startReplay();">回放</button>
+      <button class="btn-primary" onclick="closeOverlay(); startGame();">再来一局</button>
     </div>
   </div>
 </div>
 
-<!-- Replay control bar -->
-<div id="replayBar" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#1a1a2e;border-top:2px solid #7c4dff;padding:8px 12px;z-index:200;text-align:center;">
-  <button onclick="replayStep(-Infinity)" style="background:#2d1b4e;border:1px solid #7c4dff;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;">⏮</button>
-  <button onclick="replayStep(-1)" style="background:#2d1b4e;border:1px solid #7c4dff;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;">◀</button>
-  <button id="replayPlayBtn" onclick="toggleReplayAuto()" style="background:#2d1b4e;border:1px solid #7c4dff;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;">▶</button>
-  <button onclick="replayStep(1)" style="background:#2d1b4e;border:1px solid #7c4dff;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;">▶</button>
-  <button onclick="replayStep(Infinity)" style="background:#2d1b4e;border:1px solid #7c4dff;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;">⏭</button>
-  <input type="range" id="replaySlider" min="0" max="1" value="0" style="width:120px;vertical-align:middle;margin:0 8px;" oninput="replaySeek(this.value)">
-  <span id="replayInfo" style="color:#aaa;font-size:12px;">0/0</span>
-  <button onclick="exitReplay()" style="background:#3d1a1a;border:1px solid #e57373;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:12px;">退出回放</button>
+<!-- Replay bar -->
+<div id="replayBar" style="display:none;">
+  <button onclick="replayStep(-Infinity)">⏮</button>
+  <button onclick="replayStep(-1)">◀</button>
+  <button id="replayPlayBtn" onclick="toggleReplayAuto()">▶</button>
+  <button onclick="replayStep(1)">▶</button>
+  <button onclick="replayStep(Infinity)">⏭</button>
+  <input type="range" id="replaySlider" min="0" max="1" value="0" oninput="replaySeek(this.value)">
+  <span id="replayInfo">0/0</span>
+  <button class="btn-danger" onclick="exitReplay()">退出回放</button>
 </div>
 
 <script src="js/audio.js"></script>
@@ -136,5 +264,6 @@
 <script src="js/ai-onnx.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>
+<script src="js/shell.js"></script>
 </body>
 </html>

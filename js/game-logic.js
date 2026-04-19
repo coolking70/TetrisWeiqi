@@ -2,9 +2,9 @@
 // Constants
 // ============================================================
 const EMPTY = 0, P1 = 1, P2 = 2, DEAD1 = 3, DEAD2 = 4;
-const P1_COLOR = '#4fc3f7', P1_DARK = '#2980b9';
-const P2_COLOR = '#e040fb', P2_DARK = '#9c27b0';
-const GRID_COLOR = '#1e2d3d', BG_COLOR = '#0d1117';
+const P1_COLOR = '#00e5ff', P1_DARK = '#007a8a';  // cyber cyan
+const P2_COLOR = '#c8973a', P2_DARK = '#7a5a22';  // xianxia gold
+const GRID_COLOR = '#2a3a55', BG_COLOR = '#0a1020';
 const GHOST_ALPHA = 0.35;
 
 // Standard 7 Tetris pieces as [row, col] offsets
