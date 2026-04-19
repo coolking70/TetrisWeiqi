@@ -1080,6 +1080,21 @@ def append_eval_report(path: str, payload: Dict):
         f.write(json.dumps(payload, ensure_ascii=False) + '\n')
 
 
+def append_metrics(path: str, payload: Dict):
+    """Append one training-iteration metrics record as a JSONL line.
+
+    Each record is self-contained (iteration, timestamp, self_play/train/eval
+    sub-dicts, buffer_size, lr). Downstream consumers can stream-parse without
+    re-reading the whole file.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + '\n')
+        f.flush()
+
+
 
 def parse_int_list(spec: str) -> List[int]:
     values = []
@@ -1397,6 +1412,7 @@ def train(args):
     use_amp = args.amp and device.type in ('cuda', 'mps')
     scaler = torch.amp.GradScaler(device='cuda', enabled=use_amp and device.type == 'cuda')
     eval_report_path = os.path.join(args.save_dir, args.eval_report_name)
+    metrics_path = os.path.join(args.save_dir, args.metrics_file)
 
     start_iter = 0
     best_winrate = 0.0
@@ -1534,7 +1550,12 @@ def train(args):
               f'{t_train:.1f}s')
 
         # --- Evaluation ---
+        t_eval = 0.0
+        heuristic_eval = None
+        head_to_head = None
+        eval_ran = False
         if (iteration + 1) % args.eval_every == 0:
+            eval_ran = True
             heuristic_eval = evaluate_vs_heuristic(
                 model, num_games=args.eval_games,
                 num_simulations=args.eval_num_simulations,
@@ -1636,6 +1657,45 @@ def train(args):
         total_time = time.time() - t0
         print(f'  [Iter {iteration+1}] Total: {total_time:.1f}s | '
               f'Buffer: {len(replay_buffer)} positions')
+
+        # --- Metrics (one JSONL record per iteration) ---
+        current_lr = optimizer.param_groups[0]['lr'] if optimizer.param_groups else args.lr
+        eval_record = None
+        if eval_ran:
+            eval_record = {
+                'ran': True,
+                'seconds': t_eval,
+                'heuristic_winrate': heuristic_eval['winrate'] if heuristic_eval else None,
+                'heuristic_wins': heuristic_eval['wins_total'] if heuristic_eval else None,
+                'heuristic_losses': heuristic_eval['losses_total'] if heuristic_eval else None,
+                'heuristic_draws': heuristic_eval['draws'] if heuristic_eval else None,
+                'head_to_head_winrate': head_to_head['winrate'] if head_to_head else None,
+                'head_to_head_wins': head_to_head['wins_total'] if head_to_head else None,
+                'head_to_head_losses': head_to_head['losses_total'] if head_to_head else None,
+                'head_to_head_draws': head_to_head['draws'] if head_to_head else None,
+            }
+        append_metrics(metrics_path, {
+            'iteration': iteration + 1,
+            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'self_play': {
+                'games': args.games_per_iter,
+                'positions': len(all_data),
+                'seconds': t_selfplay,
+            },
+            'train': {
+                'loss': total_loss['loss'],
+                'policy_loss': total_loss['policy_loss'],
+                'value_loss': total_loss['value_loss'],
+                'num_batches': num_batches,
+                'seconds': t_train,
+            },
+            'eval': eval_record,
+            'buffer_size': len(replay_buffer),
+            'lr': current_lr,
+            'best_winrate': best_winrate,
+            'total_seconds': total_time,
+        })
+
         print()
 
     print('训练完成!')
@@ -1826,6 +1886,10 @@ def main():
                    help='每次评估时当前模型对最佳模型的对局数，0 表示关闭')
     p.add_argument('--eval-report-name', type=str, default='eval_history.jsonl',
                    help='评估历史输出文件名，保存在 save_dir 下')
+    p.add_argument('--metrics-file', type=str, default='metrics.jsonl',
+                   help='每轮训练指标文件名（JSONL），保存在 save_dir 下。'
+                        '每行包含 iteration / timestamp / self_play / train / '
+                        'eval / buffer_size / lr / best_winrate，便于可视化与监控。')
 
     # 保存
     p.add_argument('--save-dir', type=str, default='checkpoints', help='检查点目录')

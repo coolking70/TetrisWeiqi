@@ -532,6 +532,7 @@ function getGameState() {
 }
 
 function restoreGameState(state) {
+  invalidateAI();
   if (replayAutoTimer) {
     clearInterval(replayAutoTimer);
     replayAutoTimer = null;
@@ -772,6 +773,7 @@ function loadReplayFile(event) {
 
 function startReplay() {
   if (moveHistory.length === 0) { setStatus('没有可回放的对局'); return; }
+  invalidateAI();
   replayMode = true;
   gameActive = false;
   stopBgm();

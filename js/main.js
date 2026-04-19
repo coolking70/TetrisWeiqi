@@ -44,6 +44,7 @@ function resizeBoard() {
 }
 
 function setMode(mode) {
+  invalidateAI();
   gameMode = mode;
   document.getElementById('btnPvAI').classList.toggle('selected', mode === 'pvai');
   document.getElementById('btnPvP').classList.toggle('selected', mode === 'pvp');
@@ -52,6 +53,7 @@ function setMode(mode) {
 }
 
 function changeBoardSize() {
+  invalidateAI();
   BOARD_SIZE = parseInt(document.getElementById('boardSizeSelect').value);
   resizeBoard();
   createBoard();
@@ -59,6 +61,7 @@ function changeBoardSize() {
 }
 
 function startGame() {
+  invalidateAI();
   if (replayMode) exitReplay();
   BOARD_SIZE = parseInt(document.getElementById('boardSizeSelect').value);
   resizeBoard();

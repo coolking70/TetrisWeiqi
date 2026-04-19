@@ -7,13 +7,29 @@ const ONNX_MODEL_PATH = 'checkpoints_m5_mps/best_browser.onnx';
 const INPUT_CHANNELS = 22;
 
 // ============================================================
+// AI cancellation — bumped on any state change that would
+// make an in-flight async AI's result invalid (new game, mode
+// switch, board resize, load, replay, end game).
+// ============================================================
+let aiGeneration = 0;
+function invalidateAI() { aiGeneration++; }
+function aiStillValid(myGen) {
+  return myGen === aiGeneration
+      && gameActive
+      && currentPlayer === P2
+      && gameMode === 'pvai'
+      && !replayMode;
+}
+
+// ============================================================
 // Heuristic AI
 // ============================================================
 function aiMove() {
-  if (!gameActive || currentPlayer !== P2) return;
+  if (!gameActive || currentPlayer !== P2 || gameMode !== 'pvai' || replayMode) return;
+  const myGen = aiGeneration;
   const aiLevel = parseInt(document.getElementById('aiLevelSelect').value);
-  if (aiLevel === 4) { neuralNetworkMove(); return; }
-  if (aiLevel === 5) { mctsMove(); return; }
+  if (aiLevel === 4) { neuralNetworkMove(myGen); return; }
+  if (aiLevel === 5) { mctsMove(myGen); return; }
   heuristicAiMove(aiLevel);
 }
 
@@ -241,8 +257,9 @@ function encodeState(player) {
   return data;
 }
 
-async function neuralNetworkMove() {
+async function neuralNetworkMove(myGen) {
   const session = await loadOnnxModel();
+  if (!aiStillValid(myGen)) return;
   if (!session) { heuristicAiMove(3); return; }
 
   const S = BOARD_SIZE;
@@ -250,6 +267,7 @@ async function neuralNetworkMove() {
   const inputTensor = new ort.Tensor('float32', stateData, [1, INPUT_CHANNELS, S, S]);
 
   const results = await session.run({ state: inputTensor });
+  if (!aiStillValid(myGen)) return;
   const policyLogits = results.policy.data;
 
   const piece = pieces[P2];
@@ -273,6 +291,7 @@ async function neuralNetworkMove() {
   }
 
   if (candidates.length === 0) {
+    if (!aiStillValid(myGen)) return;
     aiSkipMove('神经网络');
     return;
   }
@@ -293,6 +312,7 @@ async function neuralNetworkMove() {
     if (rand <= 0) { move = c; break; }
   }
 
+  if (!aiStillValid(myGen)) return;
   executeAiMove(move, '神经网络');
 }
 
@@ -586,11 +606,12 @@ class MCTSNode {
   }
 }
 
-async function mctsSearch(session, rootGame, player) {
+async function mctsSearch(session, rootGame, player, myGen) {
   const S = rootGame.size;
   const root = new MCTSNode(rootGame, null, null);
 
   await expandNode(session, root, player);
+  if (myGen !== undefined && !aiStillValid(myGen)) return null;
   if (root.children.length === 0) return null;
 
   for (let sim = 0; sim < MCTS_SIMS; sim++) {
@@ -606,6 +627,7 @@ async function mctsSearch(session, rootGame, player) {
       value = s1 > s2 ? 1 : (s1 < s2 ? -1 : 0);
     } else {
       value = await expandNode(session, node, player);
+      if (myGen !== undefined && !aiStillValid(myGen)) return null;
     }
 
     let cur = node;
@@ -618,6 +640,7 @@ async function mctsSearch(session, rootGame, player) {
     if (sim % 8 === 7) {
       setStatus(`AI 思考中... (${sim + 1}/${MCTS_SIMS})`);
       await new Promise(r => setTimeout(r, 0));
+      if (myGen !== undefined && !aiStillValid(myGen)) return null;
     }
   }
 
@@ -669,17 +692,21 @@ async function expandNode(session, node, mctsPlayer) {
   return player === mctsPlayer ? value : -value;
 }
 
-async function mctsMove() {
-  if (!gameActive || currentPlayer !== P2) return;
+async function mctsMove(myGen) {
+  if (myGen === undefined) myGen = aiGeneration;
+  if (!aiStillValid(myGen)) return;
 
   const session = await loadOnnxModel();
+  if (!aiStillValid(myGen)) return;
   if (!session) { heuristicAiMove(3); return; }
 
   setStatus('AI 思考中... (0/' + MCTS_SIMS + ')');
   await new Promise(r => setTimeout(r, 0));
+  if (!aiStillValid(myGen)) return;
 
   const rootGame = SimGame.fromGlobal();
-  const bestMove = await mctsSearch(session, rootGame, P2);
+  const bestMove = await mctsSearch(session, rootGame, P2, myGen);
+  if (!aiStillValid(myGen)) return;
 
   if (!bestMove) {
     aiSkipMove('MCTS');

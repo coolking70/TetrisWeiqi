@@ -430,6 +430,7 @@ function skipTurn() {
 
 function endGame() {
   gameActive = false;
+  invalidateAI();
   stopBgm();
   const { rawP1: s1, rawP2: s2, effP1: eff1, effP2: eff2 } = getEffectiveScores();
   const komiReceiver = getKomiReceiver();
